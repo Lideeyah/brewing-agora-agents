@@ -1,55 +1,51 @@
 # Brewing
 
-### The economy layer for AI agents.
+**The Athenian Agora for autonomous agents.**
 
-Agents are getting capable enough to run entire businesses. They research, write, analyze, strategize — and increasingly, they delegate. One agent hires another. A swarm of specialized workers gets spun up for a task, paid for their output, and disbanded.
+In classical Athens, the agora wasn't just a marketplace — it was the coordination layer that let strangers transact with each other, build reputation, and create a shared economic memory. It worked because the city enforced the rules.
 
-But when money moves between agents, who enforces the deal?
+AI agents are ready to be economic actors. They can research, negotiate, execute, delegate. But they're transacting in a vacuum — no escrow, no SLA enforcement, no trust between agents that have never met. The employer agent hopes the worker delivers. The worker hopes it gets paid. When it goes wrong, there's no agora to settle it.
 
-Right now: nobody. The employer agent hopes the worker delivers. The worker agent hopes it gets paid. There's no contract. No escrow. No recourse when an SLA gets missed. Trust between autonomous agents — entities with no reputation, no history, no handshake — is completely unsolved.
-
-**Brewing is the fix.**
+Brewing is that coordination layer. A decentralized clearinghouse and control plane for the agentic economy — built on Circle's Arc L1, where USDC is the native settlement currency.
 
 ---
 
-## How It Works
+## The Problem with Agent Commerce Today
 
-An employer agent posts a job. USDC locks in a smart contract the moment the job is created — the worker knows they'll get paid. The worker (a Claude agent) completes the task. The employer reviews the output and approves. USDC hits the worker's wallet in under a second.
+When one AI agent hires another, three things have to be true for it to work:
 
-Miss the SLA deadline? The contract slashes the job automatically and refunds the employer. No dispute. No arbitration. No humans.
+1. **The worker gets paid** — even if the employer agent decides not to, goes offline, or gets replaced
+2. **The employer gets recourse** — if the worker misses the deadline or delivers nothing, funds come back
+3. **Neither party needs to trust the other** — agents from different systems, different teams, different companies, transacting cold
+
+None of this exists today. Brewing builds it.
+
+---
+
+## Four Pillars
+
+### I. Agent Commerce Protocol — Autonomous B2B Negotiation
+A Planner Agent needing a capability doesn't hardcode a worker. It queries Brewing's active registry, compares workers by on-chain track record, negotiates execution parameters, and commits the deal to escrow — fully autonomously. No human scheduling the handoff.
+
+### II. AgentVaults — Economic Security & SLA Enforcement
+Funds lock the moment a job is posted. The escrow is the contract, not a promise. If the worker delivers and the employer approves, USDC moves to the worker in under a second. If the SLA deadline passes with no delivery, the contract slashes the job and refunds the employer. No arbitration. No appeals. No humans.
 
 ```
-Employer Agent  →  lock USDC in escrow  →  worker picks up task
-                                        ↓
-                                   Claude runs
-                                        ↓
-                   approve work  ←  output delivered
-                        ↓
-                  USDC → worker  (~400ms on Arc)
-
-
-     [if worker ghosts]
-          ↓
-     SLA expires → slash → USDC → employer
+create_job()  →  USDC locked  →  worker executes
+                                      │
+                          ┌───────────┴───────────┐
+                     approved                  SLA breach
+                          │                        │
+                    complete_job()           slash_job()
+                          │                        │
+                   USDC → worker           USDC → employer
 ```
 
-This is trustless B2B settlement for AI agents. Two agents that have never interacted, from different teams, with no shared infrastructure — can now transact safely.
+### III. Verifiable Agent Identity — On-Chain Provenance
+Every agent carries a non-transferable identity card: owner, endpoints, payment address, reputation score. Every task produces a cryptographically signed receipt, creating an immutable delegation trace from human principal down through every sub-agent that touched the job. Built for the audit trail that enterprise deployments will require.
 
----
-
-## Why This Matters Now
-
-The agentic economy is coming faster than the infrastructure for it. By 2026, agents are already being hired by other agents for sub-tasks. The bottleneck isn't capability — it's trust and payment.
-
-Brewing turns a smart contract into the trust layer. The SLA is code. The payment is code. The slash condition is code. Agents don't need to know each other, trust each other, or have any history. The contract enforces everything.
-
----
-
-## Why Arc
-
-Every other chain makes this hard. USDC on Ethereum requires `approve` + `transferFrom` — two transactions, ERC20 complexity, gas fees in a volatile asset. An agent with a $0.10 task budget can get wiped out by a gas spike before the job even starts.
-
-Arc L1 is Circle's EVM chain where **USDC is the native gas token**. Agents earn USDC, spend USDC, pay gas in USDC. One asset, one mental model, ~$0.01 per transaction, ~400ms finality. It's the first chain where per-task micropayments actually make economic sense.
+### IV. USDC-Native Micropayments — Zero Gas Friction
+On any other chain, paying agents in USDC means ERC20 `approve` + `transferFrom` — two transactions, gas in a volatile asset, fees that can exceed the task value. On Arc, USDC is the native gas token. Agents earn it, spend it, and pay execution fees in the same asset. A $0.10 task costs ~$0.01 in fees. A circular agent economy that's actually economical.
 
 ---
 
@@ -57,14 +53,26 @@ Arc L1 is Circle's EVM chain where **USDC is the native gas token**. Agents earn
 
 **Contract:** [`0x584164ce429991C30B5c83D5774d0870A77F5A22`](https://testnet.arcscan.app/address/0x584164ce429991C30B5c83D5774d0870A77F5A22)
 
-| Job | Task | USDC | Outcome |
-|-----|------|------|---------|
-| #7 | Market research | $0.10 | ✅ Paid to worker |
-| #8 | Competitive analysis | $0.10 | ✅ Paid to worker |
-| #9 | Product strategy | $0.10 | ✅ Paid to worker |
-| #10 | Adversarial (1s SLA) | $0.05 | 🔴 Slashed → refunded |
+Not a demo. Not a simulation. Real transactions on Arc testnet, verifiable on the block explorer right now.
 
-**10 jobs on-chain. $0.60 settled. $0.35 slashed. All verifiable.**
+| Job | Task | USDC | Result | TX |
+|-----|------|------|--------|----|
+| #7 | Market research | $0.10 | ✅ Worker paid | [view ↗](https://testnet.arcscan.app/tx/0xc910eb0b683e7abf1536d40df95c4b05fad3fef5204b0ce618f8b786c6ee85ba) |
+| #8 | Competitive analysis | $0.10 | ✅ Worker paid | [view ↗](https://testnet.arcscan.app/tx/0x0436aae001d64011614ab8d7670bc7616e41a5e4cf55fa6e01aeee462baae60d) |
+| #9 | Product strategy | $0.10 | ✅ Worker paid | [view ↗](https://testnet.arcscan.app/tx/0xbedd40dcf8f111aa07bf8bdfa636609e11a84b78c7bf008d41e1a306ca553314) |
+| #10 | Adversarial (1s SLA) | $0.05 | 🔴 Slashed → refunded | [view ↗](https://testnet.arcscan.app/tx/0x328f71732680742d7b7585a848466284b52f95b3356a48a15eab3e18adc3ec6b) |
+
+$0.60 USDC settled to workers. $0.35 USDC slashed back to employers. Every wei accounted for.
+
+---
+
+## Reputation, On-Chain
+
+The reputation model is designed to be manipulation-resistant. A thin track record isn't worth the same as a deep one. Diversity across chains counts. Contract breaches are permanent.
+
+$$\text{Score} = \left(\frac{\text{baseScore} \times \text{volumeMultiplier}}{10000}\right) + \text{diversityBonus} - \text{slashPenalty}$$
+
+Where `volumeMultiplier` scales logarithmically — 50 completed jobs isn't 10× better than 5, but it's meaningfully more trustworthy. And a slash penalty from `AgentEscrow` is immutable. You can't delete bad history.
 
 ---
 
@@ -72,16 +80,18 @@ Arc L1 is Circle's EVM chain where **USDC is the native gas token**. Agents earn
 
 | Layer | Tech |
 |-------|------|
-| Escrow contract | Vyper 0.4.0 — `AgentEscrow.vy`, 147 lines |
-| Chain | Arc Testnet · EVM · Chain ID 5042002 · Native USDC |
-| Tests | titanoboa — 22 tests, 0.38s, no devnet needed |
-| Backend | FastAPI + web3.py — async Arc RPC |
-| AI Agent | Claude claude-opus-4-5 — autonomous task loop |
-| Dashboard | React + Vite — live on-chain job feed |
+| Escrow contract | Vyper 0.4.0 — 147 lines, `msg.value` / `send()` |
+| Chain | Arc L1 · EVM · Chain ID 5042002 · Native USDC |
+| Agent custody | Circle Developer-Controlled Wallets (MPC, keys never leave Circle HSM) |
+| AI agents | Claude claude-opus-4-5 — autonomous task execution loop |
+| Concurrency | `asyncio.Lock()` + 3.5s pacemaker — governed, enterprise-grade throughput |
+| Tests | titanoboa — 22 tests, 0.38s |
+| Backend | FastAPI + web3.py |
+| Dashboard | React + Vite — live on-chain feed |
 
 ---
 
-## Try It
+## Run It
 
 ```bash
 git clone https://github.com/Lideeyah/brewing-agora-agents
@@ -90,67 +100,37 @@ cd brewing-agora-agents
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run the tests
+# Tests — no devnet, no wallet, no setup
 pytest tests/ -v
-# → 22 passed in 0.38s
+# 22 passed in 0.38s
 
-# Run the agent demo (uses live Arc testnet contract)
-cp .env.example .env  # add your ARC_RPC_URL + ANTHROPIC_API_KEY
+# Live agent demo — posts jobs, Claude works, USDC settles on Arc
+cp .env.example .env  # add ARC_RPC_URL + ANTHROPIC_API_KEY
 python3 -m backend.agent
 
-# Start the dashboard
+# Dashboard
 uvicorn backend.main:app --reload --port 8000 &
 cd app && npm install && npm run dev
-# → open http://localhost:5173/arc
+# → http://localhost:5173/arc
 ```
 
----
-
-## The Contract (Core Logic)
-
-Three functions. That's the entire trust layer.
-
-```vyper
-@payable
-@external
-def create_job(_worker: address, _timeout: uint256, _ipfs_hash: bytes32) -> uint256:
-    # Employer locks USDC via msg.value — no ERC20 approve needed
-    assert msg.value >= MIN_AMOUNT
-    assert _worker != msg.sender
-    self.jobs[self.job_count] = Job(
-        employer=msg.sender, worker=_worker,
-        amount=msg.value,
-        sla_timeout=block.timestamp + _timeout,
-        status=1,
-    )
-    return self.job_count
-
-@external
-def complete_job(_job_id: uint256):
-    # Employer approves → USDC instantly to worker
-    # State updated before transfer — no reentrancy vector
-    self.jobs[_job_id].status = 2
-    send(job.worker, job.amount)
-
-@external
-def slash_job(_job_id: uint256):
-    # SLA expired → full refund to employer, worker gets nothing
-    assert block.timestamp > job.sla_timeout or msg.sender == self.owner
-    self.jobs[_job_id].status = 3
-    send(job.employer, job.amount)
-```
+The live contract is already deployed. You don't need to redeploy to run the demo.
 
 ---
 
-## What's Next
+## What's Being Built
 
-Brewing is infrastructure, not an app. The goal is a protocol that any agent framework can integrate — give your agents a wallet, point them at the contract, and they can hire and be hired by anyone.
+Brewing is infrastructure, not an app. The immediate implementation — escrow, SLA enforcement, agent loop — is the foundation. The protocol roadmap:
 
-Near-term: IPFS job specs (already wired in), multi-agent task graphs, reputation scores derived from on-chain SLA history. Longer term: mainnet deployment, SDK packages for LangChain / AutoGen / CrewAI, and a marketplace where agents post capability offers.
+- **IPFS job specs** — structured task definitions agents can parse and verify (already wired in the contract as `ipfs_spec_hash`)
+- **Multi-agent task graphs** — Planner agents decompose, Brewing routes and settles each sub-task independently
+- **ERC-8004 Agent Cards** — standardized on-chain identity for the agentic ecosystem
+- **SDK integrations** — plug Brewing into LangChain, AutoGen, CrewAI with a single import
+- **Mainnet** — same contract, same economics, real USDC
 
-The agentic economy needs a payment layer. This is it.
+The agentic economy needs a clearinghouse. Every mature market does.
 
 ---
 
-*Built for the [Canteen Agora Agents Hackathon](https://thecanteenapp.com) · May 2026*  
-*Contract · [testnet.arcscan.app](https://testnet.arcscan.app/address/0x584164ce429991C30B5c83D5774d0870A77F5A22)*
+*Built for the [Canteen Agora Agents Hackathon](https://thecanteenapp.com) · May 2026*
+*Arc Testnet · [testnet.arcscan.app](https://testnet.arcscan.app/address/0x584164ce429991C30B5c83D5774d0870A77F5A22)*
