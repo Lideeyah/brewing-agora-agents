@@ -29,6 +29,11 @@ interface TaskRecord {
   subtasks:         SubTask[]
   created_at:       number
   completed_at:     number | null
+  // optional fields present on legacy / single-agent tasks
+  agent_name?:  string | null
+  create_tx?:   string | null
+  settle_tx?:   string | null
+  receipt_id?:  string | null
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
