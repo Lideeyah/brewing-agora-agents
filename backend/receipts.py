@@ -115,14 +115,21 @@ def sign_receipt(
     return partial
 
 
-# ── In-memory receipt store ───────────────────────────────────────────────────
+# ── Persistent receipt store ──────────────────────────────────────────────────
+
+from pathlib import Path
+
+RECEIPTS_FILE = Path(__file__).parent.parent / "receipts.json"
+
 
 class ReceiptStore:
     def __init__(self):
         self._receipts: dict[str, WorkReceipt] = {}
+        self._load()
 
     def save(self, receipt: WorkReceipt):
         self._receipts[receipt.receipt_id] = receipt
+        self._persist()
 
     def get(self, receipt_id: str) -> WorkReceipt | None:
         return self._receipts.get(receipt_id)
@@ -132,6 +139,20 @@ class ReceiptStore:
 
     def all(self) -> list[WorkReceipt]:
         return sorted(self._receipts.values(), key=lambda r: r.completed_at, reverse=True)
+
+    def _persist(self):
+        data = {rid: asdict(r) for rid, r in self._receipts.items()}
+        RECEIPTS_FILE.write_text(json.dumps(data, indent=2))
+
+    def _load(self):
+        if not RECEIPTS_FILE.exists():
+            return
+        try:
+            data = json.loads(RECEIPTS_FILE.read_text())
+            for rid, d in data.items():
+                self._receipts[rid] = WorkReceipt(**d)
+        except Exception:
+            pass  # corrupt file — start fresh
 
 
 receipt_store = ReceiptStore()

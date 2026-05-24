@@ -39,16 +39,23 @@ async def lifespan(app: FastAPI):
 
 
 def _seed_registry():
+    """Seed registry with demo agents — skip any already registered (preserves reputation)."""
+    import hashlib
     specs = [
         ("ResearchBot",  ["research", "market-analysis", "literature-review"]),
         ("AnalystBot",   ["analysis", "defi", "risk-assessment", "competitive-analysis"]),
         ("StrategyBot",  ["strategy", "product", "positioning", "roadmap"]),
     ]
+    owner = client.account.address
     for name, caps in specs:
+        # Deterministic ID — same formula as registry._make_id
+        agent_id = hashlib.sha256(f"{owner.lower()}:{name.lower()}".encode()).hexdigest()[:16]
+        if registry.get(agent_id):
+            continue  # already registered — keep existing reputation
         wallet = provision_agent_wallet(name)
         registry.register(
             name         = name,
-            owner        = client.account.address,
+            owner        = owner,
             payment_addr = wallet.address,
             capabilities = caps,
             endpoint     = f"http://localhost:8000/agents/{name.lower()}",
