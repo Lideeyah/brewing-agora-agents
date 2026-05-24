@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.hypothesis/
+
+# Environment — never commit secrets
+.env
+
+# macOS
+.DS_Store
+
+# Bytecode cache
+**/__pycache__/
+*.pyc
+
+# Editor
+.idea/
+.vscode/
+*.swp
