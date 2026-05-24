@@ -1,6 +1,6 @@
 """
 Brewing Arc API — FastAPI backend
-Exposes all four pillars over HTTP for the React dashboard.
+B2B AI task marketplace on Circle Arc L1.
 
 Run locally:
     cd ~/arc
@@ -10,6 +10,7 @@ import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,10 +20,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.brewing_sdk    import BrewingArcClient, paced_api_call
+from backend.brewing_sdk    import BrewingArcClient
 from backend.registry       import registry, compute_reputation
 from backend.circle_wallets import provision_agent_wallet
 from backend.receipts       import sign_receipt, receipt_store
+from backend.tasks          import task_store, TaskRecord
+from backend.businesses     import business_store
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
@@ -33,25 +36,22 @@ client: BrewingArcClient | None = None
 async def lifespan(app: FastAPI):
     global client
     client = BrewingArcClient()
-    # Seed registry with demo agents on startup
     _seed_registry()
     yield
 
 
 def _seed_registry():
-    """Seed registry with demo agents — skip any already registered (preserves reputation)."""
     import hashlib
     specs = [
-        ("ResearchBot",  ["research", "market-analysis", "literature-review"]),
-        ("AnalystBot",   ["analysis", "defi", "risk-assessment", "competitive-analysis"]),
-        ("StrategyBot",  ["strategy", "product", "positioning", "roadmap"]),
+        ("ResearchBot",  ["research", "market-analysis", "literature-review", "summarization"]),
+        ("AnalystBot",   ["analysis", "data", "financial", "risk-assessment", "comparison"]),
+        ("StrategyBot",  ["strategy", "planning", "recommendations", "decision-support"]),
     ]
     owner = client.account.address
     for name, caps in specs:
-        # Deterministic ID — same formula as registry._make_id
         agent_id = hashlib.sha256(f"{owner.lower()}:{name.lower()}".encode()).hexdigest()[:16]
         if registry.get(agent_id):
-            continue  # already registered — keep existing reputation
+            continue
         wallet = provision_agent_wallet(name)
         registry.register(
             name         = name,
@@ -62,7 +62,7 @@ def _seed_registry():
         )
 
 
-app = FastAPI(title="Brewing Arc API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Brewing Arc API", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,24 +73,21 @@ app.add_middleware(
 
 # ── Request models ────────────────────────────────────────────────────────────
 
+class OnboardRequest(BaseModel):
+    name:  str
+    email: str
+
+class PostTaskRequest(BaseModel):
+    description:      str
+    budget_usdc:      float
+    deadline_hours:   int   = 24
+    employer_address: str   = ""
+    employer_name:    str   = ""
+
 class PostJobRequest(BaseModel):
     worker:          str
     usdc_amount:     float
     timeout_seconds: int = 3600
-
-# ── Wallet ───────────────────────────────────────────────────────────────────
-
-@app.get("/api/wallet")
-async def get_wallet():
-    addr = os.getenv("CIRCLE_WALLET_ADDRESS", "")
-    balance_usdc = 0.0
-    if client and addr:
-        try:
-            bal_wei = client.w3.eth.get_balance(client.w3.to_checksum_address(addr))
-            balance_usdc = round(bal_wei / 10**18, 4)
-        except Exception:
-            pass
-    return {"address": addr, "balance_usdc": balance_usdc, "network": "arc-testnet", "type": "SCA"}
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -100,73 +97,204 @@ async def health():
         "status":   "ok",
         "network":  "arc-testnet",
         "agents":   len(registry.all()),
+        "tasks":    len(task_store.all()),
         "receipts": len(receipt_store.all()),
-        "circle_dcw": provision_agent_wallet.__module__,
     }
 
-# ── Pillar A: Agent Registry / ACP Discovery ──────────────────────────────────
+# ── Onboarding ────────────────────────────────────────────────────────────────
+
+@app.post("/api/onboard")
+async def onboard(req: OnboardRequest):
+    """Create (or retrieve) a Circle DCW wallet for a new business user."""
+    existing = business_store.by_email(req.email)
+    if existing:
+        try:
+            bal = await client.native_balance(existing.wallet_address)
+        except Exception:
+            bal = 0.0
+        return {
+            "business_id":    existing.business_id,
+            "wallet_address": existing.wallet_address,
+            "balance_usdc":   bal,
+            "existing":       True,
+        }
+
+    wallet = provision_agent_wallet(req.name)
+    biz    = business_store.create(req.name, req.email, wallet.address, wallet.wallet_id)
+    return {
+        "business_id":    biz.business_id,
+        "wallet_address": wallet.address,
+        "balance_usdc":   0.0,
+        "existing":       False,
+    }
+
+# ── Task marketplace ──────────────────────────────────────────────────────────
+
+@app.post("/api/tasks")
+async def post_task(req: PostTaskRequest):
+    """
+    Full autonomous loop:
+    Claude selects agent → lock USDC in escrow → agent runs task → settle → receipt.
+    """
+    import anthropic as _anthropic
+
+    employer_addr = req.employer_address or client.account.address
+
+    # Create task record immediately
+    task = task_store.create(
+        employer_address = employer_addr,
+        employer_name    = req.employer_name,
+        description      = req.description,
+        budget_usdc      = req.budget_usdc,
+        deadline_hours   = req.deadline_hours,
+    )
+    task.status = "in_progress"
+    task_store.update(task)
+
+    try:
+        ai   = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+        loop = asyncio.get_running_loop()
+
+        # 1. Claude selects the best agent for this task
+        agents     = registry.all()
+        agent_list = "\n".join(
+            [f"- {a.name}: {', '.join(a.capabilities[:4])}" for a in agents]
+        )
+        sel = await loop.run_in_executor(None, lambda: ai.messages.create(
+            model      = "claude-haiku-4-5-20251001",
+            max_tokens = 20,
+            messages   = [{
+                "role":    "user",
+                "content": (
+                    f"Task: {req.description}\n\n"
+                    f"Agents:\n{agent_list}\n\n"
+                    "Reply with ONLY the agent name that best fits. No explanation."
+                ),
+            }],
+        ))
+        chosen_name = sel.content[0].text.strip()
+        chosen      = next(
+            (a for a in agents if a.name.lower() in chosen_name.lower() or chosen_name.lower() in a.name.lower()),
+            agents[0],
+        )
+        task.agent_name = chosen.name
+        task.agent_id   = chosen.agent_id
+        task_store.update(task)
+
+        # 2. Lock USDC in escrow
+        escrow_result = await client.post_job(
+            worker          = chosen.payment_addr,
+            usdc_amount     = req.budget_usdc,
+            timeout_seconds = req.deadline_hours * 3600,
+        )
+        task.job_id    = escrow_result["job_id"]
+        task.create_tx = escrow_result["create_tx"]
+        task_store.update(task)
+
+        # 3. Agent runs the task
+        work = await loop.run_in_executor(None, lambda: ai.messages.create(
+            model      = "claude-opus-4-5",
+            max_tokens = 600,
+            messages   = [{
+                "role":    "user",
+                "content": (
+                    f"You are {chosen.name}, a specialized AI agent. "
+                    f"Complete this task for a client:\n\n{req.description}\n\n"
+                    "Provide a clear, professional response."
+                ),
+            }],
+        ))
+        output      = work.content[0].text.strip()
+        task.result = output
+        task_store.update(task)
+
+        # 4. Release USDC to agent wallet
+        settle_tx      = await client.complete_job(task.job_id)
+        task.settle_tx = settle_tx
+
+        # 5. Sign on-chain receipt
+        employer_key = os.getenv("ARC_PRIVATE_KEY", "")
+        if employer_key:
+            receipt = sign_receipt(
+                job_id          = task.job_id,
+                employer_addr   = client.account.address,
+                employer_key    = employer_key,
+                worker_addr     = chosen.payment_addr,
+                worker_agent_id = chosen.agent_id,
+                task_type       = chosen.capabilities[0] if chosen.capabilities else "general",
+                output_text     = output,
+                amount_usdc     = req.budget_usdc,
+                tx_hash         = settle_tx,
+            )
+            receipt_store.save(receipt)
+            task.receipt_id = receipt.receipt_id
+
+        registry.record_completion(chosen.agent_id)
+        task.status       = "completed"
+        task.completed_at = int(time.time())
+        task_store.update(task)
+
+        return asdict(task)
+
+    except Exception as e:
+        task.status = "refunded"
+        task_store.update(task)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks")
+async def get_tasks():
+    return [asdict(t) for t in task_store.all()]
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    t = task_store.get(task_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return asdict(t)
+
+# ── Analytics (landing page stats) ────────────────────────────────────────────
+
+@app.get("/api/analytics")
+async def analytics():
+    try:
+        jobs      = await client.get_all_jobs()
+        completed = [j for j in jobs if j.status == "Completed"]
+        agents    = registry.all()
+        tasks     = task_store.all()
+
+        return {
+            "metrics": {
+                "totalJobsCompleted": len(completed),
+                "usdcSettled":        round(sum(j.amount_usdc for j in completed), 2),
+                "activeAgents":       len(agents),
+                "totalTasks":         len(tasks),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Wallet ─────────────────────────────────────────────────────────────────────
+
+@app.get("/api/wallet")
+async def get_wallet():
+    addr         = os.getenv("CIRCLE_WALLET_ADDRESS", "")
+    balance_usdc = 0.0
+    if client and addr:
+        try:
+            balance_usdc = await client.native_balance(addr)
+        except Exception:
+            pass
+    return {"address": addr, "balance_usdc": round(balance_usdc, 4), "network": "arc-testnet"}
+
+# ── Agents ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/agents")
 async def get_agents():
-    """List all registered agents, ranked by reputation."""
     return registry.to_dict()
 
-
-@app.get("/api/agents/find/{capability}")
-async def find_agents(capability: str):
-    """
-    ACP Discovery — return agents capable of handling this task,
-    ranked by on-chain reputation score.
-    """
-    candidates = registry.find(capability)
-    if not candidates:
-        raise HTTPException(status_code=404, detail=f"No agents found for '{capability}'")
-    return [c.__dict__ for c in candidates]
-
-
-@app.get("/api/agents/{agent_id}")
-async def get_agent(agent_id: str):
-    card = registry.get(agent_id)
-    if not card:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    return card.__dict__
-
-# ── Pillar B: Escrow / AgentVaults ────────────────────────────────────────────
-
-@app.post("/api/jobs")
-async def post_job(req: PostJobRequest):
-    try:
-        result = await client.post_job(req.worker, req.usdc_amount, req.timeout_seconds)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/jobs/{job_id}/complete")
-async def complete_job(job_id: int):
-    try:
-        tx = await client.complete_job(job_id)
-        return {"tx_hash": tx, "job_id": job_id}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/jobs/{job_id}/slash")
-async def slash_job(job_id: int):
-    try:
-        tx = await client.slash_job(job_id)
-        return {"tx_hash": tx, "job_id": job_id}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.get("/api/jobs/{job_id}")
-async def get_job(job_id: int):
-    try:
-        return (await client.get_job(job_id)).__dict__
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
+# ── Jobs (raw on-chain) ────────────────────────────────────────────────────────
 
 @app.get("/api/jobs")
 async def get_all_jobs():
@@ -175,45 +303,11 @@ async def get_all_jobs():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.get("/api/analytics")
-async def analytics():
-    try:
-        jobs      = await client.get_all_jobs()
-        completed = [j for j in jobs if j.status == "Completed"]
-        slashed   = [j for j in jobs if j.status == "Slashed"]
-        agents    = registry.all()
-
-        return {
-            "program": os.getenv("ESCROW_CONTRACT_ADDRESS", "not-deployed"),
-            "network": "arc-testnet",
-            "metrics": {
-                "totalJobs":      len(jobs),
-                "completedJobs":  len(completed),
-                "slashedJobs":    len(slashed),
-                "completionRate": round(len(completed) / len(jobs) * 100, 1) if jobs else 0,
-                "usdcSettled":    round(sum(j.amount_usdc for j in completed), 6),
-                "usdcSlashed":    round(sum(j.amount_usdc for j in slashed), 6),
-                "registeredAgents": len(agents),
-                "receiptsIssued": len(receipt_store.all()),
-            },
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ── Pillar C: Signed Receipts ─────────────────────────────────────────────────
+# ── Receipts ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/receipts")
 async def get_receipts():
     return [r.to_dict() for r in receipt_store.all()]
-
-
-@app.get("/api/receipts/{receipt_id}")
-async def get_receipt(receipt_id: str):
-    r = receipt_store.get(receipt_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Receipt not found")
-    return r.to_dict()
 
 
 @app.get("/api/receipts/{receipt_id}/verify")
@@ -221,103 +315,4 @@ async def verify_receipt(receipt_id: str):
     r = receipt_store.get(receipt_id)
     if not r:
         raise HTTPException(status_code=404, detail="Receipt not found")
-    valid = r.verify()
-    return {"receipt_id": receipt_id, "valid": valid, "signer": r.employer}
-
-# ── Demo trigger (dashboard button) ──────────────────────────────────────────
-
-@app.post("/api/demo/run")
-async def run_demo():
-    """
-    Full four-pillar demo triggered from the React dashboard.
-    ACP discovery → escrow → Claude → settlement → signed receipt.
-    """
-    import anthropic as _anthropic
-
-    log_lines: list[str] = []
-
-    def emit(msg: str):
-        log_lines.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
-
-    try:
-        ai = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-        employer_key = os.getenv("ARC_PRIVATE_KEY", "")
-
-        JOBS = [
-            {
-                "capability": "research",
-                "prompt": (
-                    "Summarise in 3 bullets why Arc L1 is a better settlement layer "
-                    "for AI agent economies than general-purpose EVM chains. "
-                    "Each bullet under 25 words."
-                ),
-            },
-            {
-                "capability": "strategy",
-                "prompt": (
-                    "In 2 sentences, explain how Brewing's escrow + SLA slash "
-                    "creates trust between AI agents that have never interacted before."
-                ),
-            },
-        ]
-
-        for job_spec in JOBS:
-            cap = job_spec["capability"]
-            emit(f"ACP: discovering agents for '{cap}'…")
-            candidates = registry.find(cap)
-            if not candidates:
-                emit(f"No agents found for '{cap}'")
-                continue
-
-            worker = candidates[0]
-            emit(f"Selected {worker.name} (reputation={worker.reputation:.0f} bps)")
-
-            emit(f"Locking 0.10 USDC in escrow…")
-            result = await client.post_job(
-                worker=worker.payment_addr, usdc_amount=0.10, timeout_seconds=300
-            )
-            job_id = result["job_id"]
-            emit(f"Job #{job_id} funded ✓")
-
-            emit(f"Claude running {cap} task…")
-            loop   = asyncio.get_running_loop()
-            resp   = await loop.run_in_executor(
-                None,
-                lambda p=job_spec["prompt"]: ai.messages.create(
-                    model="claude-opus-4-5", max_tokens=250,
-                    messages=[{"role": "user", "content": p}],
-                )
-            )
-            output = resp.content[0].text.strip()
-            for line in output.split("\n")[:2]:
-                if line.strip():
-                    emit(f"  → {line.strip()[:85]}")
-
-            emit(f"Releasing USDC to {worker.name}…")
-            settle_tx = await client.complete_job(job_id)
-            emit(f"Job #{job_id} settled ✓ — 0.10 USDC on-chain")
-
-            if employer_key:
-                receipt = sign_receipt(
-                    job_id=job_id,
-                    employer_addr=client.account.address,
-                    employer_key=employer_key,
-                    worker_addr=worker.payment_addr,
-                    worker_agent_id=worker.agent_id,
-                    task_type=cap,
-                    output_text=output,
-                    amount_usdc=0.10,
-                    tx_hash=settle_tx,
-                )
-                receipt_store.save(receipt)
-                emit(f"Receipt #{receipt.receipt_id[:12]}… signed ✓")
-
-            registry.record_completion(worker.agent_id)
-            emit(f"{worker.name} reputation → {worker.reputation:.0f} bps ↑")
-            await asyncio.sleep(1)
-
-        emit("── BREWING DEMO COMPLETE ──")
-    except Exception as e:
-        emit(f"Error: {e}")
-
-    return {"log": log_lines}
+    return {"receipt_id": receipt_id, "valid": r.verify(), "signer": r.employer}

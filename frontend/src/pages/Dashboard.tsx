@@ -3,196 +3,215 @@ import { useNavigate } from 'react-router-dom'
 
 const API      = import.meta.env.VITE_ARC_API_URL ?? 'http://localhost:8000'
 const EXPLORER = 'https://testnet.arcscan.app'
-const ESCROW   = '0x584164ce429991C30B5c83D5774d0870A77F5A22'
 
-const short = (s: string) => s?.length > 10 ? `${s.slice(0, 6)}…${s.slice(-4)}` : (s ?? '—')
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-interface Wallet   { address: string; balance_usdc: number; type: string }
-interface Analytics {
-  program: string
-  metrics: { totalJobs: number; completedJobs: number; slashedJobs: number; usdcSettled: number; usdcSlashed: number; registeredAgents: number; receiptsIssued: number; completionRate: number }
+interface TaskRecord {
+  task_id:          string
+  employer_address: string
+  employer_name:    string
+  description:      string
+  budget_usdc:      number
+  deadline_hours:   number
+  status:           string   // pending | in_progress | completed | refunded
+  agent_name:       string | null
+  result:           string | null
+  job_id:           number | null
+  create_tx:        string | null
+  settle_tx:        string | null
+  receipt_id:       string | null
+  created_at:       number
+  completed_at:     number | null
 }
-interface Job {
-  job_id: number; employer: string; worker: string
-  amount_usdc: number; sla_timeout: number; status: string; ipfs_spec_hash: string
-}
-interface Agent { agent_id: string; name: string; payment_addr: string; capabilities: string[]; reputation: number; jobs_completed: number; jobs_slashed: number }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
   const cfg: Record<string, string> = {
-    Completed: 'bg-arc-green/10 text-arc-green border-arc-green/20',
-    Slashed:   'bg-red-500/10 text-red-400 border-red-500/20',
-    Open:      'bg-arc-amber/10 text-arc-amber border-arc-amber/20',
+    completed:   'bg-arc-green/10 text-arc-green border-arc-green/20',
+    in_progress: 'bg-arc-amber/10 text-arc-amber border-arc-amber/20',
+    refunded:    'bg-red-500/10 text-red-400 border-red-500/20',
+    pending:     'border-arc-border text-arc-muted',
+  }
+  const label: Record<string, string> = {
+    completed:   'Completed',
+    in_progress: 'In Progress',
+    refunded:    'Refunded',
+    pending:     'Pending',
   }
   return (
-    <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${cfg[status] ?? 'border-arc-border text-arc-sub'}`}>
-      {status}
+    <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${cfg[status] ?? 'border-arc-border text-arc-muted'}`}>
+      {label[status] ?? status}
     </span>
   )
 }
 
-function Dot({ color = '#10b981' }: { color?: string }) {
-  return <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, display: 'inline-block', boxShadow: `0 0 6px ${color}`, flexShrink: 0 }} />
-}
+function Countdown({ createdAt, deadlineHours }: { createdAt: number; deadlineHours: number }) {
+  const [remaining, setRemaining] = useState(0)
 
-// ── Tab A: Workspace ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    const deadline = createdAt + deadlineHours * 3600
+    const update = () => setRemaining(Math.max(0, deadline - Math.floor(Date.now() / 1000)))
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [createdAt, deadlineHours])
 
-function WorkspaceTab() {
-  const [wallet, setWallet]       = useState<Wallet | null>(null)
-  const [analytics, setAnalytics] = useState<Analytics | null>(null)
-  const [agents, setAgents]       = useState<Agent[]>([])
-  const [running, setRunning]     = useState(false)
-  const [log, setLog]             = useState<string[]>([])
-  const logRef = useRef<HTMLDivElement>(null)
-
-  const refresh = useCallback(async () => {
-    try {
-      const [w, a, ag] = await Promise.all([
-        fetch(`${API}/api/wallet`).then(r => r.json()),
-        fetch(`${API}/api/analytics`).then(r => r.json()),
-        fetch(`${API}/api/agents`).then(r => r.json()),
-      ])
-      setWallet(w); setAnalytics(a); setAgents(ag)
-    } catch { /* offline */ }
-  }, [])
-
-  useEffect(() => { refresh(); const id = setInterval(refresh, 8000); return () => clearInterval(id) }, [refresh])
-  useEffect(() => { logRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [log])
-
-  const runDemo = async () => {
-    if (running) return
-    setRunning(true); setLog(['[00:00] Starting Brewing agent loop…'])
-    try {
-      const res  = await fetch(`${API}/api/demo/run`, { method: 'POST' })
-      const data = await res.json()
-      setLog(data.log ?? ['Done.'])
-      await refresh()
-    } catch (e: unknown) {
-      setLog([`Error: ${(e as Error).message}`])
-    } finally { setRunning(false) }
-  }
-
-  const m = analytics?.metrics
+  const h = Math.floor(remaining / 3600)
+  const m = Math.floor((remaining % 3600) / 60)
+  const s = remaining % 60
+  const fmt = (n: number) => String(n).padStart(2, '0')
 
   return (
-    <div className="flex flex-col gap-6">
+    <span className={`font-mono text-[11px] ${remaining < 3600 ? 'text-red-400' : 'text-arc-sub'}`}>
+      {fmt(h)}:{fmt(m)}:{fmt(s)} remaining
+    </span>
+  )
+}
 
-      {/* Wallet + balance bar */}
-      <div className="border border-arc-border rounded-xl bg-arc-surface p-5 flex flex-wrap gap-6 items-center justify-between">
-        <div>
-          <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-1">Circle Developer-Controlled Wallet (SCA)</div>
-          <div className="font-mono text-sm text-white">{wallet?.address ? short(wallet.address) : '—'}</div>
-          <div className="font-mono text-[10px] text-arc-sub mt-0.5">{wallet?.address ?? '—'}</div>
-        </div>
-        <div className="text-right">
-          <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-1">Native USDC Balance (Gas Token)</div>
-          <div className="font-mono text-2xl font-bold text-arc-green">{wallet?.address ? `${(wallet.balance_usdc ?? 0).toFixed(4)} USDC` : '—'}</div>
-          <div className="font-mono text-[10px] text-arc-sub">Arc L1 · no ETH required</div>
-        </div>
+// ── Tab 1: Post a Task ────────────────────────────────────────────────────────
+
+function PostTaskTab({ onTaskPosted }: { onTaskPosted: () => void }) {
+  const [desc, setDesc]         = useState('')
+  const [budget, setBudget]     = useState('0.10')
+  const [deadline, setDeadline] = useState('24')
+  const [submitting, setSub]    = useState(false)
+  const [result, setResult]     = useState<TaskRecord | null>(null)
+  const [error, setError]       = useState('')
+
+  const employerAddress = localStorage.getItem('brewing_employer_address') || ''
+  const employerName    = localStorage.getItem('brewing_employer_name') || ''
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!desc.trim() || submitting) return
+    setSub(true); setError(''); setResult(null)
+
+    try {
+      const res = await fetch(`${API}/api/tasks`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          description:      desc.trim(),
+          budget_usdc:      parseFloat(budget) || 0.10,
+          deadline_hours:   parseInt(deadline) || 24,
+          employer_address: employerAddress,
+          employer_name:    employerName,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail ?? 'Request failed')
+      }
+      const data: TaskRecord = await res.json()
+      setResult(data)
+      setDesc('')
+      onTaskPosted()
+    } catch (err: unknown) {
+      setError((err as Error).message ?? 'Something went wrong')
+    } finally {
+      setSub(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6 max-w-2xl">
+      <div>
+        <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-1">POST A TASK</div>
+        <p className="font-mono text-[12px] text-arc-sub">Describe what you need. Brewing selects the best agent, locks USDC in escrow, and releases payment when done.</p>
       </div>
 
-      {/* Metrics row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: 'Jobs On-Chain', value: m?.totalJobs ?? 0, color: '#fff' },
-          { label: 'Completed', value: m?.completedJobs ?? 0, color: '#10b981' },
-          { label: 'USDC Settled', value: m ? `$${m.usdcSettled.toFixed(2)}` : '—', color: '#f59e0b' },
-          { label: 'Avg Gas Fee', value: '~$0.009', color: '#10b981' },
-        ].map(c => (
-          <div key={c.label} className="border border-arc-border rounded-lg bg-[#030303] p-4">
-            <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-2">{c.label}</div>
-            <div className="font-mono text-xl font-bold" style={{ color: c.color }}>{c.value}</div>
-          </div>
-        ))}
-      </div>
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Task Description</label>
+          <textarea
+            value={desc}
+            onChange={e => setDesc(e.target.value)}
+            placeholder="e.g. Research the top 5 competitors in the DeFi lending space and summarise their key differentiators..."
+            rows={5}
+            required
+            className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors resize-none"
+          />
+        </div>
 
-      {/* Multi-agent trace */}
-      <div className="border border-arc-border rounded-xl bg-arc-surface">
-        <div className="border-b border-arc-border px-5 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[10px] text-arc-muted tracking-widest">[+] ACTIVE MULTI-AGENT TRACING</span>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Budget (USDC)</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={budget}
+              onChange={e => setBudget(e.target.value)}
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white focus:outline-none focus:border-arc-green transition-colors"
+            />
           </div>
-          <span className="font-mono text-[9px] text-arc-sub">Arize Phoenix Cascade</span>
-        </div>
-        <div className="p-5 flex flex-col gap-3">
-          {agents.length === 0 ? (
-            <div className="font-mono text-xs text-arc-muted">No agents registered — run the demo loop</div>
-          ) : agents.map(a => (
-            <div key={a.agent_id} className="flex items-center gap-3">
-              <span className="text-arc-muted font-mono text-xs">├──</span>
-              <Dot color={a.reputation > 0 ? '#10b981' : '#3f3f46'} />
-              <div className="flex-1">
-                <span className="font-mono text-xs text-white">{a.name}</span>
-                <span className="font-mono text-[10px] text-arc-muted ml-2">→</span>
-                <span className="font-mono text-[10px] text-arc-sub ml-2">{a.capabilities.slice(0, 2).join(', ')}</span>
-              </div>
-              <div className="text-right">
-                <div className="font-mono text-xs text-arc-green">{a.reputation.toFixed(0)} bps</div>
-                <div className="font-mono text-[9px] text-arc-muted">{a.jobs_completed}✓ {a.jobs_slashed}✗</div>
-              </div>
-            </div>
-          ))}
-          <div className="flex items-center gap-3 mt-1">
-            <span className="text-arc-muted font-mono text-xs">└──</span>
-            <Dot color="#f59e0b" />
-            <span className="font-mono text-[10px] text-arc-sub flex-1">Pacemaker active · 3.5s rate limit · max 15 req/min</span>
-            <span className="font-mono text-[9px] text-arc-amber">3.5s</span>
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Deadline</label>
+            <select
+              value={deadline}
+              onChange={e => setDeadline(e.target.value)}
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white focus:outline-none focus:border-arc-green transition-colors"
+            >
+              <option value="1">1 hour</option>
+              <option value="6">6 hours</option>
+              <option value="24">24 hours</option>
+              <option value="72">3 days</option>
+            </select>
           </div>
         </div>
-      </div>
 
-      {/* Micro-payment meter */}
-      <div className="border border-arc-border rounded-xl bg-arc-surface">
-        <div className="border-b border-arc-border px-5 py-3">
-          <span className="font-mono text-[10px] text-arc-muted tracking-widest">[+] MICRO-PAYMENT METER · x402 PROTOCOL</span>
-        </div>
-        <div className="p-5 flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-arc-muted font-mono text-xs">└──</span>
-            <span className="font-mono text-xs text-arc-sub">Verified API call cost:</span>
-            <span className="font-mono text-xs text-arc-green font-bold">0.009 USDC</span>
-            <span className="font-mono text-[10px] text-arc-muted ml-auto">Saved 98% vs ETH mainnet ($0.50+)</span>
+        {error && (
+          <div className="border border-red-500/20 rounded-lg px-4 py-3 bg-red-500/5">
+            <span className="font-mono text-xs text-red-400">{error}</span>
           </div>
-          <div className="flex items-center gap-2 ml-6">
-            <span className="font-mono text-xs text-arc-sub">Total USDC slashed (SLA breaches):</span>
-            <span className="font-mono text-xs text-red-400 font-bold">${m?.usdcSlashed?.toFixed(3) ?? '0.000'}</span>
-          </div>
-          <div className="flex items-center gap-2 ml-6">
-            <span className="font-mono text-xs text-arc-sub">Receipts issued:</span>
-            <span className="font-mono text-xs text-arc-green font-bold">{m?.receiptsIssued ?? 0}</span>
-            <span className="font-mono text-[10px] text-arc-muted">signed on-chain</span>
-          </div>
-        </div>
-      </div>
+        )}
 
-      {/* Run demo */}
-      <div className="flex items-center gap-4">
-        <button onClick={runDemo} disabled={running}
-          className={`font-mono text-xs px-6 py-2.5 rounded-lg transition-all ${
-            running ? 'bg-transparent border border-arc-muted text-arc-muted cursor-not-allowed'
-                    : 'bg-arc-green text-black font-semibold hover:bg-emerald-400'
-          }`}>
-          {running ? '⟳ Running agent loop…' : '▶ Run Full Agent Demo'}
+        <button
+          type="submit"
+          disabled={submitting || !desc.trim()}
+          className={`font-mono font-semibold text-sm px-6 py-3 rounded-lg transition-all ${
+            submitting || !desc.trim()
+              ? 'bg-arc-surface border border-arc-border text-arc-muted cursor-not-allowed'
+              : 'bg-arc-green text-black hover:bg-emerald-400'
+          }`}
+        >
+          {submitting ? '⟳ Agent working… this takes ~30s' : '▶ Submit Task'}
         </button>
-        <span className="font-mono text-[10px] text-arc-muted">ACP discovery → escrow → Claude → USDC settlement → signed receipt</span>
-      </div>
+        {submitting && (
+          <p className="font-mono text-[10px] text-arc-muted">Selecting agent → locking escrow → running task → settling USDC…</p>
+        )}
+      </form>
 
-      {/* Agent log */}
-      {log.length > 0 && (
-        <div className="border border-arc-border rounded-xl bg-[#030303] p-5">
-          <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-3">AGENT OUTPUT LOG</div>
-          <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
-            {log.map((line, i) => (
-              <div key={i} className="font-mono text-[11px] text-arc-sub leading-relaxed">
-                <span className="text-arc-border mr-3">{String(i + 1).padStart(2, '0')}</span>
-                <span className={line.includes('✓') || line.includes('settled') ? 'text-arc-green' : line.includes('Error') ? 'text-red-400' : ''}>{line}</span>
-              </div>
-            ))}
-            <div ref={logRef} />
+      {/* Confirmation */}
+      {result && result.status === 'completed' && (
+        <div className="border border-arc-green/20 rounded-xl bg-arc-green/5 p-5 flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-arc-green text-sm">✓</span>
+              <span className="font-mono text-xs font-semibold text-arc-green">Task completed by {result.agent_name}</span>
+            </div>
+            <StatusBadge status={result.status} />
+          </div>
+          <div className="font-mono text-[11px] text-white leading-relaxed bg-black/40 rounded-lg p-4 border border-arc-border">
+            {result.result}
+          </div>
+          <div className="flex flex-wrap gap-4 font-mono text-[10px] text-arc-muted border-t border-arc-green/10 pt-3">
+            <span>{result.budget_usdc.toFixed(3)} USDC settled</span>
+            {result.create_tx && (
+              <a href={`${EXPLORER}/tx/${result.create_tx}`} target="_blank" rel="noreferrer" className="text-arc-green hover:underline">
+                Escrow TX ↗
+              </a>
+            )}
+            {result.settle_tx && (
+              <a href={`${EXPLORER}/tx/${result.settle_tx}`} target="_blank" rel="noreferrer" className="text-arc-green hover:underline">
+                Settlement TX ↗
+              </a>
+            )}
+            {result.receipt_id && (
+              <span>Receipt #{result.receipt_id.slice(0, 10)}…</span>
+            )}
           </div>
         </div>
       )}
@@ -200,95 +219,176 @@ function WorkspaceTab() {
   )
 }
 
-// ── Tab B: Agent Vault (Escrows) ──────────────────────────────────────────────
+// ── Tab 2: Active Jobs ────────────────────────────────────────────────────────
 
-function VaultTab() {
-  const [jobs, setJobs]   = useState<Job[]>([])
+function ActiveJobsTab() {
+  const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [loading, setLoad] = useState(true)
 
   const refresh = useCallback(async () => {
     try {
-      const j = await fetch(`${API}/api/jobs`).then(r => r.json())
-      setJobs((j as Job[]).sort((a, b) => b.job_id - a.job_id))
+      const data = await fetch(`${API}/api/tasks`).then(r => r.json())
+      setTasks(data as TaskRecord[])
     } catch { /* offline */ } finally { setLoad(false) }
   }, [])
 
-  useEffect(() => { refresh(); const id = setInterval(refresh, 8000); return () => clearInterval(id) }, [refresh])
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, 5000)
+    return () => clearInterval(id)
+  }, [refresh])
 
-  if (loading) return <div className="font-mono text-xs text-arc-muted mt-8">Loading escrow registry…</div>
+  if (loading) return <div className="font-mono text-xs text-arc-muted mt-8">Loading jobs…</div>
+
+  if (tasks.length === 0) return (
+    <div className="border border-arc-border rounded-xl p-12 text-center">
+      <div className="font-mono text-xs text-arc-muted">No tasks yet — post your first task</div>
+    </div>
+  )
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase">ACTIVE B2B ESCROW REGISTRY</div>
-          <div className="font-mono text-[10px] text-arc-sub mt-0.5">Vyper contract · {ESCROW.slice(0,10)}… · Arc Testnet</div>
-        </div>
-        <div className="font-mono text-[10px] text-arc-sub">{jobs.length} contracts on-chain</div>
-      </div>
-
-      {jobs.length === 0 ? (
-        <div className="border border-arc-border rounded-xl p-8 text-center">
-          <div className="font-mono text-xs text-arc-muted">No escrows yet — run a demo from the Workspace tab</div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {jobs.map(job => (
-            <div key={job.job_id} className="border border-arc-border rounded-xl bg-arc-surface overflow-hidden hover:border-arc-green/30 transition-colors">
-              <div className="border-b border-arc-border px-5 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-[10px] text-arc-muted">ESCROW #{job.job_id}</span>
-                  <span className="font-mono text-[10px] text-arc-sub">{ESCROW.slice(0,10)}…</span>
-                </div>
-                <StatusBadge status={job.status} />
-              </div>
-              <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-[11px]">
-                <div className="flex flex-col gap-2">
-                  <div className="flex gap-2">
-                    <span className="text-arc-muted">├── Parent Agent:</span>
-                    <span className="text-white">{short(job.employer)}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="text-arc-muted">└── Worker Agent:</span>
-                    <span className="text-white">{short(job.worker)}</span>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <div className="flex gap-2">
-                    <span className="text-arc-muted">├── Locked Bounty:</span>
-                    <span className="text-arc-amber font-bold">{job.amount_usdc.toFixed(3)} USDC</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="text-arc-muted">└── SLA Timeout:</span>
-                    <span className="text-white">{job.sla_timeout}s · auto-slash on breach</span>
-                  </div>
-                </div>
-              </div>
-              {job.status === 'Completed' && (
-                <div className="border-t border-arc-border px-5 py-3 flex items-center justify-between bg-arc-green/5">
-                  <div className="flex items-center gap-2">
-                    <Dot color="#10b981" />
-                    <span className="font-mono text-[10px] text-arc-green">Output Verified · Circle MPC signed payout</span>
-                  </div>
-                  <a href={`${EXPLORER}/address/${job.employer}`} target="_blank" rel="noreferrer"
-                     className="font-mono text-[10px] text-arc-green hover:underline">ArcScan ↗</a>
-                </div>
-              )}
-              {job.status === 'Slashed' && (
-                <div className="border-t border-arc-border px-5 py-3 flex items-center gap-2 bg-red-500/5">
-                  <Dot color="#ef4444" />
-                  <span className="font-mono text-[10px] text-red-400">SLA breached · USDC refunded to employer</span>
-                </div>
-              )}
-              {job.ipfs_spec_hash && job.ipfs_spec_hash !== '0'.repeat(64) && (
-                <div className="border-t border-arc-border px-5 py-2 bg-[#030303]">
-                  <span className="font-mono text-[9px] text-arc-muted">spec_hash: {job.ipfs_spec_hash.slice(0, 24)}…</span>
-                </div>
+      <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase">{tasks.length} TASK{tasks.length !== 1 ? 'S' : ''} TOTAL</div>
+      {tasks.map(task => (
+        <div key={task.task_id} className="border border-arc-border rounded-xl bg-arc-surface overflow-hidden hover:border-arc-green/30 transition-colors">
+          {/* Header */}
+          <div className="border-b border-arc-border px-5 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="font-mono text-[10px] text-arc-muted flex-shrink-0">#{task.task_id}</span>
+              {task.agent_name && (
+                <span className="font-mono text-[10px] text-arc-sub">→ {task.agent_name}</span>
               )}
             </div>
-          ))}
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <span className="font-mono text-[11px] text-arc-amber font-bold">{task.budget_usdc.toFixed(3)} USDC</span>
+              <StatusBadge status={task.status} />
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="px-5 py-4 flex flex-col gap-3">
+            <p className="font-mono text-[12px] text-white leading-relaxed">{task.description}</p>
+
+            <div className="flex flex-wrap gap-4 font-mono text-[10px] text-arc-muted">
+              {task.status === 'in_progress' && (
+                <Countdown createdAt={task.created_at} deadlineHours={task.deadline_hours} />
+              )}
+              {task.completed_at && (
+                <span>Completed {new Date(task.completed_at * 1000).toLocaleTimeString()}</span>
+              )}
+              {task.create_tx && (
+                <a href={`${EXPLORER}/tx/${task.create_tx}`} target="_blank" rel="noreferrer" className="text-arc-green hover:underline">
+                  Escrow ↗
+                </a>
+              )}
+              {task.settle_tx && (
+                <a href={`${EXPLORER}/tx/${task.settle_tx}`} target="_blank" rel="noreferrer" className="text-arc-green hover:underline">
+                  Settlement ↗
+                </a>
+              )}
+            </div>
+
+            {/* Result */}
+            {task.result && (
+              <div className="border border-arc-border rounded-lg p-4 bg-black/40 mt-1">
+                <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-2">AGENT RESULT</div>
+                <p className="font-mono text-[11px] text-white leading-relaxed">{task.result}</p>
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      ))}
+    </div>
+  )
+}
+
+// ── Tab 3: Receipts ────────────────────────────────────────────────────────────
+
+function ReceiptsTab() {
+  const [tasks, setTasks] = useState<TaskRecord[]>([])
+  const [loading, setLoad] = useState(true)
+
+  useEffect(() => {
+    fetch(`${API}/api/tasks`)
+      .then(r => r.json())
+      .then((d: TaskRecord[]) => setTasks(d.filter(t => t.status === 'completed')))
+      .catch(() => null)
+      .finally(() => setLoad(false))
+  }, [])
+
+  const download = (task: TaskRecord) => {
+    const content = [
+      `BREWING TASK RECEIPT`,
+      `═══════════════════════════════`,
+      `Task ID:      ${task.task_id}`,
+      `Receipt ID:   ${task.receipt_id ?? '—'}`,
+      `Agent:        ${task.agent_name ?? '—'}`,
+      `Description:  ${task.description}`,
+      `USDC Paid:    ${task.budget_usdc.toFixed(3)}`,
+      `Completed:    ${task.completed_at ? new Date(task.completed_at * 1000).toISOString() : '—'}`,
+      `Escrow TX:    ${task.create_tx ? `${EXPLORER}/tx/${task.create_tx}` : '—'}`,
+      `Settlement TX: ${task.settle_tx ? `${EXPLORER}/tx/${task.settle_tx}` : '—'}`,
+      ``,
+      `RESULT`,
+      `───────`,
+      task.result ?? '—',
+    ].join('\n')
+
+    const blob = new Blob([content], { type: 'text/plain' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = `brewing-receipt-${task.task_id}.txt`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (loading) return <div className="font-mono text-xs text-arc-muted mt-8">Loading receipts…</div>
+
+  if (tasks.length === 0) return (
+    <div className="border border-arc-border rounded-xl p-12 text-center">
+      <div className="font-mono text-xs text-arc-muted">No completed tasks yet</div>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase">{tasks.length} COMPLETED TASK{tasks.length !== 1 ? 'S' : ''}</div>
+      {tasks.map(task => (
+        <div key={task.task_id} className="border border-arc-border rounded-xl bg-arc-surface overflow-hidden">
+          <div className="border-b border-arc-border px-5 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-arc-green text-xs">✓</span>
+              <span className="font-mono text-[11px] text-white">{task.agent_name}</span>
+              <span className="font-mono text-[10px] text-arc-muted">#{task.task_id}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[11px] text-arc-amber font-bold">{task.budget_usdc.toFixed(3)} USDC</span>
+              <button
+                onClick={() => download(task)}
+                className="font-mono text-[10px] text-arc-sub border border-arc-border rounded px-2 py-1 hover:border-arc-green hover:text-arc-green transition-colors"
+              >
+                ↓ Download
+              </button>
+            </div>
+          </div>
+          <div className="px-5 py-4 flex flex-col gap-3">
+            <p className="font-mono text-[11px] text-arc-sub">{task.description}</p>
+            <div className="flex flex-wrap gap-4 font-mono text-[10px] text-arc-muted">
+              {task.completed_at && <span>{new Date(task.completed_at * 1000).toLocaleString()}</span>}
+              {task.receipt_id   && <span>Receipt #{task.receipt_id.slice(0, 16)}…</span>}
+              {task.settle_tx    && (
+                <a href={`${EXPLORER}/tx/${task.settle_tx}`} target="_blank" rel="noreferrer" className="text-arc-green hover:underline">
+                  On-chain proof ↗
+                </a>
+              )}
+            </div>
+            {task.result && (
+              <div className="border border-arc-border rounded-lg p-4 bg-black/40">
+                <p className="font-mono text-[11px] text-white leading-relaxed">{task.result}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -297,44 +397,56 @@ function VaultTab() {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [tab, setTab] = useState<'workspace' | 'vault'>('workspace')
+  const [tab, setTab]         = useState<'post' | 'jobs' | 'receipts'>('post')
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const employerName = localStorage.getItem('brewing_employer_name') || ''
+
+  const TABS = [
+    { id: 'post'     as const, label: 'Post a Task',  sub: 'New task · escrow · settle' },
+    { id: 'jobs'     as const, label: 'Active Jobs',  sub: 'Status · results · timers'  },
+    { id: 'receipts' as const, label: 'Receipts',     sub: 'History · proof · download' },
+  ]
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col">
+
       {/* Nav */}
       <nav className="border-b border-arc-border sticky top-0 z-50 bg-black/90 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/')} className="font-mono font-bold text-sm tracking-[0.2em] text-white hover:text-arc-green transition-colors">
+            <button onClick={() => navigate('/')} className="font-mono font-bold text-sm tracking-[0.2em] hover:text-arc-green transition-colors">
               BREWING
             </button>
             <span className="text-arc-border">/</span>
-            <span className="font-mono text-xs text-arc-sub">Agora Dashboard</span>
+            <span className="font-mono text-xs text-arc-sub">
+              {employerName ? `${employerName} Dashboard` : 'Dashboard'}
+            </span>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-arc-green pulse-dot" />
-              <span className="font-mono text-[11px] text-arc-green tracking-wide">Arc Testnet Connected</span>
+              <span className="font-mono text-[11px] text-arc-green tracking-wide">Arc Testnet Live</span>
             </div>
-            <a href={`${EXPLORER}/address/${ESCROW}`} target="_blank" rel="noreferrer"
-               className="font-mono text-[10px] text-arc-sub hover:text-arc-green transition-colors">
-              {ESCROW.slice(0,10)}… ↗
-            </a>
+            <button
+              onClick={() => navigate('/onboard')}
+              className="font-mono text-[10px] text-arc-sub border border-arc-border rounded px-3 py-1.5 hover:border-arc-green hover:text-arc-green transition-colors"
+            >
+              + New Account
+            </button>
           </div>
         </div>
       </nav>
 
       {/* Tab bar */}
       <div className="border-b border-arc-border bg-arc-surface">
-        <div className="max-w-6xl mx-auto px-6 flex gap-0">
-          {([
-            { id: 'workspace', label: '01  WORKSPACE', sub: 'Planner · Agents · Metrics' },
-            { id: 'vault',     label: '02  AGENT VAULT', sub: 'Escrows · SLA · Settlement' },
-          ] as const).map(t => (
+        <div className="max-w-6xl mx-auto px-6 flex">
+          {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`px-6 py-4 flex flex-col gap-0.5 border-b-2 transition-all ${
                 tab === t.id ? 'border-arc-green text-white' : 'border-transparent text-arc-muted hover:text-arc-sub'
-              }`}>
+              }`}
+            >
               <span className="font-mono text-xs font-semibold tracking-wide">{t.label}</span>
               <span className="font-mono text-[9px] text-arc-muted">{t.sub}</span>
             </button>
@@ -344,7 +456,9 @@ export default function Dashboard() {
 
       {/* Content */}
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
-        {tab === 'workspace' ? <WorkspaceTab /> : <VaultTab />}
+        {tab === 'post'     && <PostTaskTab onTaskPosted={() => { setRefreshKey(k => k + 1); setTab('jobs') }} />}
+        {tab === 'jobs'     && <ActiveJobsTab key={refreshKey} />}
+        {tab === 'receipts' && <ReceiptsTab />}
       </main>
     </div>
   )
