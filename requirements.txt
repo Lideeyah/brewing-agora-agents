@@ -20,3 +20,6 @@ python-dotenv>=1.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 httpx>=0.27.0
+circle-configurations==9.3.3
+circle-developer-controlled-wallets==9.3.3
+circle-web3-sdk-util==9.3.3
