@@ -27,3 +27,7 @@ receipts.json
 .idea/
 .vscode/
 *.swp
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/
