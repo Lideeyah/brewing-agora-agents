@@ -48,6 +48,12 @@ export default function LandingPage() {
             </div>
             <button
               onClick={() => navigate('/onboard')}
+              className="font-mono text-xs text-arc-sub border border-arc-border px-4 py-2 rounded-md hover:border-arc-green hover:text-arc-green transition-colors"
+            >
+              Sign In
+            </button>
+            <button
+              onClick={() => navigate('/onboard')}
               className="bg-arc-green text-black font-mono font-semibold text-xs px-4 py-2 rounded-md hover:bg-emerald-400 transition-colors"
             >
               Get Started →

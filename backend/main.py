@@ -104,6 +104,26 @@ async def health():
         "receipts": len(receipt_store.all()),
     }
 
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+@app.post("/api/login")
+async def login(req: OnboardRequest):
+    """Sign in an existing business by email. Returns 404 if not found."""
+    existing = business_store.by_email(req.email)
+    if not existing:
+        raise HTTPException(status_code=404, detail="No account found for that email. Please create one.")
+    try:
+        bal = await client.native_balance(existing.wallet_address)
+    except Exception:
+        bal = 0.0
+    return {
+        "business_id":    existing.business_id,
+        "wallet_address": existing.wallet_address,
+        "name":           existing.name,
+        "balance_usdc":   bal,
+        "existing":       True,
+    }
+
 # ── Onboarding ────────────────────────────────────────────────────────────────
 
 @app.post("/api/onboard")

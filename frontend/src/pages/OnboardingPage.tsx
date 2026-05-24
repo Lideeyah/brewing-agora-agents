@@ -5,37 +5,74 @@ const API      = import.meta.env.VITE_ARC_API_URL ?? 'http://localhost:8000'
 const FAUCET   = 'https://faucet.circle.com'
 const EXPLORER = 'https://testnet.arcscan.app'
 
-type Step = 'form' | 'creating' | 'done'
+type Mode = 'signin' | 'create'
+type Step = 'form' | 'loading' | 'done'
+
+interface WalletResult {
+  address:    string
+  balance_usdc: number
+  business_id: string
+  name:       string
+  isNew:      boolean
+}
 
 export default function OnboardingPage() {
   const navigate = useNavigate()
-  const [step, setStep]       = useState<Step>('form')
-  const [name, setName]       = useState('')
-  const [email, setEmail]     = useState('')
-  const [error, setError]     = useState('')
-  const [wallet, setWallet]   = useState<{ address: string; balance_usdc: number; business_id: string } | null>(null)
+
+  const [mode, setMode]   = useState<Mode>('signin')
+  const [step, setStep]   = useState<Step>('form')
+  const [name, setName]   = useState('')
+  const [email, setEmail] = useState('')
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<WalletResult | null>(null)
+
+  const reset = (newMode: Mode) => {
+    setMode(newMode)
+    setStep('form')
+    setError('')
+    setName('')
+    setEmail('')
+    setResult(null)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim() || !email.trim()) return
+    if (!email.trim()) return
+    if (mode === 'create' && !name.trim()) return
     setError('')
-    setStep('creating')
+    setStep('loading')
 
     try {
-      const res  = await fetch(`${API}/api/onboard`, {
+      const endpoint = mode === 'signin' ? '/api/login' : '/api/onboard'
+      const body     = mode === 'signin'
+        ? { name: email.trim(), email: email.trim() }  // login only needs email; name is a dummy
+        : { name: name.trim(), email: email.trim() }
+
+      const res  = await fetch(`${API}${endpoint}`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name: name.trim(), email: email.trim() }),
+        body:    JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(await res.text())
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.detail ?? 'Something went wrong')
+      }
+
       const data = await res.json()
 
-      // Persist to localStorage so Dashboard can read it
+      // Persist session
       localStorage.setItem('brewing_employer_address', data.wallet_address)
-      localStorage.setItem('brewing_employer_name', name.trim())
-      localStorage.setItem('brewing_business_id', data.business_id)
+      localStorage.setItem('brewing_employer_name',    data.name ?? name.trim())
+      localStorage.setItem('brewing_business_id',      data.business_id)
 
-      setWallet({ address: data.wallet_address, balance_usdc: data.balance_usdc, business_id: data.business_id })
+      setResult({
+        address:      data.wallet_address,
+        balance_usdc: data.balance_usdc,
+        business_id:  data.business_id,
+        name:         data.name ?? name.trim(),
+        isNew:        !data.existing,
+      })
       setStep('done')
     } catch (err: unknown) {
       setError((err as Error).message ?? 'Something went wrong')
@@ -49,7 +86,10 @@ export default function OnboardingPage() {
       {/* Nav */}
       <nav className="border-b border-arc-border bg-black/90">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
-          <button onClick={() => navigate('/')} className="font-mono font-bold text-sm tracking-[0.2em] hover:text-arc-green transition-colors">
+          <button
+            onClick={() => navigate('/')}
+            className="font-mono font-bold text-sm tracking-[0.2em] hover:text-arc-green transition-colors"
+          >
             BREWING
           </button>
           <div className="flex items-center gap-2">
@@ -62,44 +102,95 @@ export default function OnboardingPage() {
       <main className="flex-1 flex items-center justify-center px-6 py-16">
         <div className="w-full max-w-md">
 
-          {/* Step: Form */}
+          {/* ── Form step ─────────────────────────────────────────────────── */}
           {step === 'form' && (
             <div className="flex flex-col gap-8">
-              <div className="flex flex-col gap-2">
-                <div className="font-mono text-[10px] text-arc-muted tracking-widest">STEP 01 OF 02</div>
-                <h1 className="text-2xl font-bold">Create your account</h1>
+
+              {/* Mode toggle */}
+              <div className="flex flex-col gap-3">
+                <h1 className="text-2xl font-bold">
+                  {mode === 'signin' ? 'Welcome back.' : 'Create your account.'}
+                </h1>
                 <p className="font-mono text-[12px] text-arc-sub leading-relaxed">
-                  Enter your details and we'll create a Circle-managed wallet for you on Arc Testnet.
+                  {mode === 'signin'
+                    ? 'Sign in with your email to access your dashboard and agent history.'
+                    : 'Get a Circle-managed wallet on Arc Testnet and start hiring AI agents.'
+                  }
                 </p>
+
+                {/* Tab switcher */}
+                <div className="flex border border-arc-border rounded-lg overflow-hidden mt-1">
+                  <button
+                    type="button"
+                    onClick={() => reset('signin')}
+                    className={`flex-1 font-mono text-xs py-2.5 transition-colors ${
+                      mode === 'signin'
+                        ? 'bg-arc-green text-black font-semibold'
+                        : 'text-arc-muted hover:text-white'
+                    }`}
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => reset('create')}
+                    className={`flex-1 font-mono text-xs py-2.5 transition-colors ${
+                      mode === 'create'
+                        ? 'bg-arc-green text-black font-semibold'
+                        : 'text-arc-muted hover:text-white'
+                    }`}
+                  >
+                    Create Account
+                  </button>
+                </div>
               </div>
 
               <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+
+                {/* Name — only for create */}
+                {mode === 'create' && (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">
+                      Company / Name
+                    </label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="Acme Corp"
+                      required
+                      className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors"
+                    />
+                  </div>
+                )}
+
                 <div className="flex flex-col gap-1.5">
-                  <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Company / Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="Acme Corp"
-                    required
-                    className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors"
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Email</label>
+                  <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">
+                    Email
+                  </label>
                   <input
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
                     placeholder="you@company.com"
                     required
+                    autoFocus
                     className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors"
                   />
                 </div>
 
                 {error && (
-                  <div className="border border-red-500/20 rounded-lg px-4 py-3 bg-red-500/5">
+                  <div className="border border-red-500/20 rounded-lg px-4 py-3 bg-red-500/5 flex flex-col gap-1">
                     <span className="font-mono text-xs text-red-400">{error}</span>
+                    {mode === 'signin' && error.includes('No account') && (
+                      <button
+                        type="button"
+                        onClick={() => reset('create')}
+                        className="font-mono text-[11px] text-arc-green hover:underline text-left mt-1"
+                      >
+                        Create an account instead →
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -107,59 +198,93 @@ export default function OnboardingPage() {
                   type="submit"
                   className="bg-arc-green text-black font-mono font-semibold text-sm px-6 py-3 rounded-lg hover:bg-emerald-400 transition-colors mt-2"
                 >
-                  Create Wallet →
+                  {mode === 'signin' ? 'Sign In →' : 'Create Account →'}
                 </button>
               </form>
+
+              {/* Switch mode hint */}
+              <p className="font-mono text-[11px] text-arc-muted text-center">
+                {mode === 'signin'
+                  ? <>No account yet?{' '}
+                      <button onClick={() => reset('create')} className="text-arc-green hover:underline">
+                        Create one
+                      </button>
+                    </>
+                  : <>Already have an account?{' '}
+                      <button onClick={() => reset('signin')} className="text-arc-green hover:underline">
+                        Sign in
+                      </button>
+                    </>
+                }
+              </p>
             </div>
           )}
 
-          {/* Step: Creating */}
-          {step === 'creating' && (
+          {/* ── Loading step ───────────────────────────────────────────────── */}
+          {step === 'loading' && (
             <div className="flex flex-col items-center gap-6 text-center">
               <div className="w-12 h-12 border-2 border-arc-green border-t-transparent rounded-full animate-spin" />
               <div className="flex flex-col gap-2">
-                <div className="font-mono text-[10px] text-arc-muted tracking-widest">PROVISIONING WALLET</div>
-                <p className="font-mono text-sm text-arc-sub">Creating your Circle DCW on Arc Testnet…</p>
+                <div className="font-mono text-[10px] text-arc-muted tracking-widest">
+                  {mode === 'signin' ? 'SIGNING IN' : 'PROVISIONING WALLET'}
+                </div>
+                <p className="font-mono text-sm text-arc-sub">
+                  {mode === 'signin' ? 'Looking up your account…' : 'Creating your Circle DCW on Arc Testnet…'}
+                </p>
               </div>
-              <div className="border border-arc-border rounded-xl bg-arc-surface p-5 w-full text-left flex flex-col gap-2">
-                {[
-                  '✓ Connecting to Circle MPC',
-                  '✓ Generating Arc L1 wallet',
-                  '⟳ Registering on-chain…',
-                ].map((line, i) => (
-                  <div key={i} className={`font-mono text-[11px] ${line.startsWith('✓') ? 'text-arc-green' : 'text-arc-sub'}`}>{line}</div>
-                ))}
-              </div>
+              {mode === 'create' && (
+                <div className="border border-arc-border rounded-xl bg-arc-surface p-5 w-full text-left flex flex-col gap-2">
+                  {[
+                    '✓ Connecting to Circle MPC',
+                    '✓ Generating Arc L1 wallet',
+                    '⟳ Registering on-chain…',
+                  ].map((line, i) => (
+                    <div
+                      key={i}
+                      className={`font-mono text-[11px] ${line.startsWith('✓') ? 'text-arc-green' : 'text-arc-sub'}`}
+                    >
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Step: Done */}
-          {step === 'done' && wallet && (
+          {/* ── Done step ─────────────────────────────────────────────────── */}
+          {step === 'done' && result && (
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-2">
-                <div className="font-mono text-[10px] text-arc-muted tracking-widest">STEP 02 OF 02</div>
-                <h1 className="text-2xl font-bold">Wallet created <span className="text-arc-green">✓</span></h1>
+                <h1 className="text-2xl font-bold">
+                  {result.isNew
+                    ? <>Account created <span className="text-arc-green">✓</span></>
+                    : <>Welcome back, {result.name} <span className="text-arc-green">✓</span></>
+                  }
+                </h1>
+                {!result.isNew && (
+                  <p className="font-mono text-[12px] text-arc-sub">Your wallet and task history are ready.</p>
+                )}
               </div>
 
               <div className="border border-arc-green/20 rounded-xl bg-arc-green/5 p-5 flex flex-col gap-3">
                 <div className="flex flex-col gap-1">
                   <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase">Your Arc Wallet</div>
-                  <div className="font-mono text-xs text-white break-all">{wallet.address}</div>
+                  <div className="font-mono text-xs text-white break-all">{result.address}</div>
                 </div>
                 <div className="flex items-center justify-between border-t border-arc-green/10 pt-3">
                   <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase">USDC Balance</div>
-                  <div className="font-mono text-lg font-bold text-arc-green">{wallet.balance_usdc.toFixed(4)} USDC</div>
+                  <div className="font-mono text-lg font-bold text-arc-green">{result.balance_usdc.toFixed(4)} USDC</div>
                 </div>
               </div>
 
-              {wallet.balance_usdc === 0 && (
+              {result.isNew && result.balance_usdc === 0 && (
                 <div className="border border-arc-border rounded-xl bg-arc-surface p-5 flex flex-col gap-3">
                   <div className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Fund Your Wallet</div>
                   <p className="font-mono text-[11px] text-arc-sub leading-relaxed">
                     Get 20 free USDC from the Circle testnet faucet to start posting tasks.
                   </p>
                   <div className="font-mono text-[10px] text-arc-muted border border-arc-border rounded px-3 py-2 bg-black break-all">
-                    {wallet.address}
+                    {result.address}
                   </div>
                   <a
                     href={FAUCET}
@@ -170,7 +295,7 @@ export default function OnboardingPage() {
                     Open Circle Faucet ↗
                   </a>
                   <a
-                    href={`${EXPLORER}/address/${wallet.address}`}
+                    href={`${EXPLORER}/address/${result.address}`}
                     target="_blank"
                     rel="noreferrer"
                     className="font-mono text-[10px] text-arc-muted hover:text-arc-green transition-colors text-center"
@@ -188,6 +313,7 @@ export default function OnboardingPage() {
               </button>
             </div>
           )}
+
         </div>
       </main>
     </div>
