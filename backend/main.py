@@ -84,6 +84,8 @@ class PostTaskRequest(BaseModel):
     employer_address: str   = ""
     employer_name:    str   = ""
     drive_files:      list  = []  # [{name: str, content: str}]
+    gmail_threads:    list  = []  # [{subject: str, content: str}]
+    slack_messages:   list  = []  # [{channel: str, content: str}]
 
 class PostJobRequest(BaseModel):
     worker:          str
@@ -168,20 +170,52 @@ async def post_task(req: PostTaskRequest):
             missing = [n for n, a in [("ResearchBot", research_bot), ("AnalystBot", analyst_bot), ("WriterBot", writer_bot)] if not a]
             raise ValueError(f"Required agents not in registry: {missing}")
 
-        # ── Build Drive file context (injected into every agent prompt) ─────
-        file_context = ""
+        # ── Build context from all connected data sources ─────────────────
+        context_sections: list[str] = []
+
+        # Google Drive files
         if req.drive_files:
-            sections = [
+            drive_parts = [
                 f"=== {f['name']} ===\n{f['content']}"
                 for f in req.drive_files
                 if f.get("name") and f.get("content")
             ]
-            if sections:
-                file_context = (
-                    "\n\nATTACHED BUSINESS FILES FROM GOOGLE DRIVE "
-                    f"({len(sections)} file{'s' if len(sections) != 1 else ''}):\n\n"
-                    + "\n\n".join(sections)
+            if drive_parts:
+                context_sections.append(
+                    f"GOOGLE DRIVE FILES ({len(drive_parts)} file{'s' if len(drive_parts) != 1 else ''}):\n\n"
+                    + "\n\n".join(drive_parts)
                 )
+
+        # Gmail threads
+        if req.gmail_threads:
+            gmail_parts = [
+                f"=== Email: {t['subject']} ===\n{t['content']}"
+                for t in req.gmail_threads
+                if t.get("subject") and t.get("content")
+            ]
+            if gmail_parts:
+                context_sections.append(
+                    f"GMAIL THREADS ({len(gmail_parts)} thread{'s' if len(gmail_parts) != 1 else ''}):\n\n"
+                    + "\n\n".join(gmail_parts)
+                )
+
+        # Slack messages
+        if req.slack_messages:
+            slack_parts = [
+                f"=== #{m['channel']} ===\n{m['content']}"
+                for m in req.slack_messages
+                if m.get("channel") and m.get("content")
+            ]
+            if slack_parts:
+                context_sections.append(
+                    f"SLACK MESSAGES ({len(slack_parts)} channel{'s' if len(slack_parts) != 1 else ''}):\n\n"
+                    + "\n\n".join(slack_parts)
+                )
+
+        file_context = (
+            "\n\nBUSINESS CONTEXT FROM CONNECTED DATA SOURCES:\n\n"
+            + "\n\n---\n\n".join(context_sections)
+        ) if context_sections else ""
 
         # ── Step 1: Planner breaks task into 3 sub-tasks ─────────────────────
         plan_resp = await loop.run_in_executor(None, lambda: ai.messages.create(
@@ -356,6 +390,41 @@ async def analytics():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Slack OAuth callback ──────────────────────────────────────────────────────
+
+@app.get("/oauth/slack/callback")
+async def slack_oauth_callback(code: str = "", error: str = ""):
+    """Exchange Slack OAuth code for access token, redirect back to dashboard."""
+    import httpx
+    from fastapi.responses import RedirectResponse
+
+    if error or not code:
+        return RedirectResponse(url="/dashboard?slack_error=1")
+
+    slack_client_id     = os.getenv("SLACK_CLIENT_ID", "")
+    slack_client_secret = os.getenv("SLACK_CLIENT_SECRET", "")
+    redirect_uri        = os.getenv("SLACK_REDIRECT_URI", "http://localhost:8000/oauth/slack/callback")
+
+    if not slack_client_id or not slack_client_secret:
+        return RedirectResponse(url="/dashboard?slack_connected=1")  # no-creds fallback
+
+    try:
+        async with httpx.AsyncClient() as hc:
+            resp = await hc.post("https://slack.com/api/oauth.v2.access", data={
+                "client_id":     slack_client_id,
+                "client_secret": slack_client_secret,
+                "code":          code,
+                "redirect_uri":  redirect_uri,
+            })
+        data = resp.json()
+        if not data.get("ok"):
+            return RedirectResponse(url="/dashboard?slack_error=1")
+        # Store token in env for this session (production: use DB/session store)
+        os.environ["SLACK_BOT_TOKEN"] = data.get("access_token", "")
+        return RedirectResponse(url="/dashboard?slack_connected=1")
+    except Exception:
+        return RedirectResponse(url="/dashboard?slack_error=1")
 
 # ── Wallet ─────────────────────────────────────────────────────────────────────
 

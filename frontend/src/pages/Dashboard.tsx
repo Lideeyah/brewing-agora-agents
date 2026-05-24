@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import DriveFilePicker, { type DriveFilePayload } from '../components/DriveFilePicker'
+import GmailPicker, { type GmailThreadPayload } from '../components/GmailPicker'
 
 const API      = import.meta.env.VITE_ARC_API_URL ?? 'http://localhost:8000'
 const EXPLORER = 'https://testnet.arcscan.app'
@@ -33,6 +34,11 @@ interface TaskRecord {
   create_tx?:       string | null
   settle_tx?:       string | null
   receipt_id?:      string | null
+}
+
+interface SlackMessagePayload {
+  channel: string
+  content: string
 }
 
 interface AgentCard {
@@ -110,72 +116,41 @@ function ReputationBar({ score }: { score: number }) {
   )
 }
 
-// ── Gmail connect (UI stub — shows connected state) ───────────────────────────
+// ── Slack connect (stub — real OAuth needs VITE_SLACK_CLIENT_ID) ─────────────
 
-function GmailConnect({ onChange }: { onChange: (connected: boolean) => void }) {
-  const [connected, setConnected] = useState(() => localStorage.getItem('gmail_connected') === '1')
+const SLACK_CLIENT_ID = import.meta.env.VITE_SLACK_CLIENT_ID ?? ''
 
-  const connect = () => {
-    localStorage.setItem('gmail_connected', '1')
-    setConnected(true)
-    onChange(true)
-  }
-  const disconnect = () => {
-    localStorage.removeItem('gmail_connected')
-    setConnected(false)
-    onChange(false)
-  }
-
-  useEffect(() => { onChange(connected) }, [])  // eslint-disable-line
-
-  if (connected) {
-    return (
-      <div className="flex items-center justify-between border border-arc-border rounded-lg px-4 py-2.5 bg-arc-surface">
-        <div className="flex items-center gap-2">
-          <GmailIcon className="text-arc-green" />
-          <span className="font-mono text-[11px] text-arc-green font-semibold">Gmail connected</span>
-          <span className="font-mono text-[10px] text-arc-muted">(agents can read relevant threads)</span>
-        </div>
-        <button
-          type="button"
-          onClick={disconnect}
-          className="font-mono text-[10px] text-arc-muted hover:text-white transition-colors"
-        >
-          Disconnect
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={connect}
-      className="flex items-center gap-2 border border-arc-border rounded-lg px-4 py-2.5 font-mono text-xs text-arc-sub hover:border-arc-green hover:text-white transition-colors w-fit"
-    >
-      <GmailIcon />
-      Connect Gmail
-    </button>
-  )
-}
-
-// ── Slack connect (UI stub) ───────────────────────────────────────────────────
-
-function SlackConnect({ onChange }: { onChange: (connected: boolean) => void }) {
+function SlackConnect({ onMessagesChange }: { onMessagesChange: (msgs: SlackMessagePayload[]) => void }) {
   const [connected, setConnected] = useState(() => localStorage.getItem('slack_connected') === '1')
 
   const connect = () => {
-    localStorage.setItem('slack_connected', '1')
-    setConnected(true)
-    onChange(true)
+    if (SLACK_CLIENT_ID) {
+      // Real OAuth — redirect to Slack
+      const redirect = encodeURIComponent(`${import.meta.env.VITE_ARC_API_URL ?? 'http://localhost:8000'}/oauth/slack/callback`)
+      const scope    = encodeURIComponent('channels:history,channels:read')
+      window.location.href = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scope}&redirect_uri=${redirect}`
+    } else {
+      // No credentials yet — show placeholder state
+      localStorage.setItem('slack_connected', '1')
+      setConnected(true)
+    }
   }
   const disconnect = () => {
     localStorage.removeItem('slack_connected')
+    localStorage.removeItem('slack_token')
     setConnected(false)
-    onChange(false)
+    onMessagesChange([])
   }
 
-  useEffect(() => { onChange(connected) }, [])  // eslint-disable-line
+  // Check for token returned from OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('slack_connected') === '1') {
+      localStorage.setItem('slack_connected', '1')
+      setConnected(true)
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   if (connected) {
     return (
@@ -183,7 +158,11 @@ function SlackConnect({ onChange }: { onChange: (connected: boolean) => void }) 
         <div className="flex items-center gap-2">
           <SlackIcon className="text-arc-green" />
           <span className="font-mono text-[11px] text-arc-green font-semibold">Slack connected</span>
-          <span className="font-mono text-[10px] text-arc-muted">(agents can read channel context)</span>
+          {!SLACK_CLIENT_ID && (
+            <span className="font-mono text-[9px] text-arc-amber border border-arc-amber/30 rounded px-1.5 py-0.5">
+              Add VITE_SLACK_CLIENT_ID to pull live messages
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -353,20 +332,19 @@ function MarketplaceTab({ onHire }: { onHire: (agentName: string) => void }) {
 // ── Tab 2: Post a Task ────────────────────────────────────────────────────────
 
 function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: string; onTaskPosted: () => void }) {
-  const [desc, setDesc]             = useState('')
-  const [budget, setBudget]         = useState('0.10')
-  const [deadline, setDeadline]     = useState('24')
-  const [submitting, setSub]        = useState(false)
-  const [result, setResult]         = useState<TaskRecord | null>(null)
-  const [error, setError]           = useState('')
-  const [driveFiles, setDriveFiles] = useState<DriveFilePayload[]>([])
-  const [, setGmailConnected]       = useState(false)
-  const [, setSlackConnected]       = useState(false)
+  const [desc, setDesc]               = useState('')
+  const [budget, setBudget]           = useState('0.10')
+  const [deadline, setDeadline]       = useState('24')
+  const [submitting, setSub]          = useState(false)
+  const [result, setResult]           = useState<TaskRecord | null>(null)
+  const [error, setError]             = useState('')
+  const [driveFiles, setDriveFiles]   = useState<DriveFilePayload[]>([])
+  const [gmailThreads, setGmailThreads] = useState<GmailThreadPayload[]>([])
+  const [slackMessages, setSlackMessages] = useState<SlackMessagePayload[]>([])
 
   const employerAddress = localStorage.getItem('brewing_employer_address') || ''
   const employerName    = localStorage.getItem('brewing_employer_name') || ''
 
-  // If a specific agent was hired from marketplace, note it in the description placeholder
   const placeholder = preselectedAgent
     ? `Describe your task for ${preselectedAgent}…`
     : 'e.g. Research the top 5 competitors in the DeFi lending space and summarise their key differentiators…'
@@ -387,6 +365,8 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
           employer_address: employerAddress,
           employer_name:    employerName,
           drive_files:      driveFiles,
+          gmail_threads:    gmailThreads,
+          slack_messages:   slackMessages,
         }),
         signal: AbortSignal.timeout(180_000),
       })
@@ -448,13 +428,13 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
           {/* Gmail */}
           <div className="flex flex-col gap-1">
             <span className="font-mono text-[10px] text-arc-muted">Gmail</span>
-            <GmailConnect onChange={setGmailConnected} />
+            <GmailPicker onThreadsChange={setGmailThreads} />
           </div>
 
           {/* Slack */}
           <div className="flex flex-col gap-1">
             <span className="font-mono text-[10px] text-arc-muted">Slack</span>
-            <SlackConnect onChange={setSlackConnected} />
+            <SlackConnect onMessagesChange={setSlackMessages} />
           </div>
         </div>
 
