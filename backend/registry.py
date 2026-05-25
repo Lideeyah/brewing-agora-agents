@@ -104,7 +104,7 @@ class AgentRegistry:
         owner:        str,
         payment_addr: str,
         capabilities: list[str],
-        endpoint:     str = "http://localhost:8000/agents/{id}",
+        endpoint:     str = "http://localhost:8000/agents/{id}",  # overridden by callers via RENDER_EXTERNAL_URL
     ) -> AgentCard:
         agent_id = _make_id(owner, name)
         card = AgentCard(

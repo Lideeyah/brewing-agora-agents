@@ -43,9 +43,11 @@ async def lifespan(app: FastAPI):
 def _seed_registry():
     import hashlib
     specs = [
-        ("ResearchBot", ["research", "market-analysis", "literature-review", "summarization"]),
-        ("AnalystBot",  ["analysis", "data", "financial", "risk-assessment", "comparison"]),
-        ("WriterBot",   ["writing", "content", "synthesis", "communication", "reporting"]),
+        ("MarketResearchBot", ["market-intelligence", "trading-signals", "research", "sector-analysis", "price-trends"]),
+        ("SentimentBot",      ["sentiment-analysis", "news-analysis", "social-signals", "nlp", "market-mood"]),
+        ("ArbitrageBot",      ["arbitrage", "price-discrepancy", "cross-market", "spread-detection", "execution-signals"]),
+        ("PortfolioBot",      ["portfolio-analysis", "rebalancing", "asset-allocation", "risk-management", "recommendations"]),
+        ("PredictionBot",     ["event-research", "probability-scoring", "forecasting", "scenario-analysis", "risk-prediction"]),
     ]
     owner = client.account.address
     for name, caps in specs:
@@ -53,12 +55,13 @@ def _seed_registry():
         if registry.get(agent_id):
             continue
         wallet = provision_agent_wallet(name)
+        base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
         registry.register(
             name         = name,
             owner        = owner,
             payment_addr = wallet.address,
             capabilities = caps,
-            endpoint     = f"http://localhost:8000/agents/{name.lower()}",
+            endpoint     = f"{base_url}/agents/{name.lower()}",
         )
 
 
@@ -187,14 +190,14 @@ async def post_task(req: PostTaskRequest):
         ai   = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
         loop = asyncio.get_running_loop()
 
-        # ── Locate the three named agents ─────────────────────────────────────
-        by_name     = {a.name: a for a in registry.all()}
-        research_bot = by_name.get("ResearchBot")
-        analyst_bot  = by_name.get("AnalystBot")
-        writer_bot   = by_name.get("WriterBot")
+        # ── Locate the three pipeline agents ──────────────────────────────────
+        by_name          = {a.name: a for a in registry.all()}
+        market_research_bot = by_name.get("MarketResearchBot")
+        sentiment_bot       = by_name.get("SentimentBot")
+        portfolio_bot       = by_name.get("PortfolioBot")
 
-        if not all([research_bot, analyst_bot, writer_bot]):
-            missing = [n for n, a in [("ResearchBot", research_bot), ("AnalystBot", analyst_bot), ("WriterBot", writer_bot)] if not a]
+        if not all([market_research_bot, sentiment_bot, portfolio_bot]):
+            missing = [n for n, a in [("MarketResearchBot", market_research_bot), ("SentimentBot", sentiment_bot), ("PortfolioBot", portfolio_bot)] if not a]
             raise ValueError(f"Required agents not in registry: {missing}")
 
         # ── Build context from all connected data sources ─────────────────
@@ -255,9 +258,9 @@ async def post_task(req: PostTaskRequest):
                     f"Task: {req.description}"
                     f"{file_context}\n\n"
                     "Return JSON only — no extra text:\n"
-                    '{"research": "sub-task for ResearchBot: gather facts, context, background", '
-                    '"analysis": "sub-task for AnalystBot: analyse data, draw insights, compare", '
-                    '"writing": "sub-task for WriterBot: synthesise and write the final client-ready output"}'
+                    '{"market_research": "sub-task for MarketResearchBot: gather market intelligence, price trends, sector data", '
+                    '"sentiment": "sub-task for SentimentBot: analyse news and social signals, measure market mood", '
+                    '"portfolio": "sub-task for PortfolioBot: synthesise findings into portfolio recommendations and risk-adjusted conclusions"}'
                 ),
             }],
         ))
@@ -269,18 +272,18 @@ async def post_task(req: PostTaskRequest):
             plan = {}
 
         sub_descriptions = {
-            "ResearchBot": plan.get("research") or f"Research background, facts and context for: {req.description}",
-            "AnalystBot":  plan.get("analysis") or f"Analyse key data, trends and insights for: {req.description}",
-            "WriterBot":   plan.get("writing")  or f"Write a clear, professional summary report for: {req.description}",
+            "MarketResearchBot": plan.get("market_research") or f"Research market intelligence, price trends, and sector data for: {req.description}",
+            "SentimentBot":      plan.get("sentiment")       or f"Analyse news and social signals, measure market mood for: {req.description}",
+            "PortfolioBot":      plan.get("portfolio")       or f"Synthesise findings into portfolio recommendations and risk-adjusted conclusions for: {req.description}",
         }
 
         # ── Steps 2–4: Each agent gets its own escrow, runs, settles ─────────
         sub_budget   = round(req.budget_usdc / 3, 6)
         employer_key = os.getenv("ARC_PRIVATE_KEY", "")
         pipeline     = [
-            (research_bot, "research"),
-            (analyst_bot,  "analysis"),
-            (writer_bot,   "writing"),
+            (market_research_bot, "market_research"),
+            (sentiment_bot,       "sentiment"),
+            (portfolio_bot,       "portfolio"),
         ]
         task.subtasks = []
         agent_outputs: dict[str, str] = {}
@@ -485,7 +488,7 @@ async def register_agent(req: RegisterAgentRequest):
         owner        = req.payment_addr,
         payment_addr = req.payment_addr,
         capabilities = req.capabilities,
-        endpoint     = f"http://localhost:8000/agents/{agent_id}",
+        endpoint     = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:8000')}/agents/{agent_id}",
     )
     import dataclasses
     d = dataclasses.asdict(card)

@@ -363,20 +363,30 @@ function SlackConnect({ onMessagesChange }: { onMessagesChange: (msgs: SlackMess
 // ── Tab 1: Marketplace ────────────────────────────────────────────────────────
 
 const AGENT_META: Record<string, { specialty: string; pricePerTask: number; description: string }> = {
-  ResearchBot: {
-    specialty:    'Research & Analysis',
+  MarketResearchBot: {
+    specialty:    'Market Intelligence & Trading Signals',
     pricePerTask: 0.033,
-    description:  'Gathers facts, context, and background on any topic. Best for market research, competitive intelligence, and literature review.',
+    description:  'Scans markets for trends, price movements, and sector shifts. Best for trading signal generation, competitive positioning, and price discovery.',
   },
-  AnalystBot: {
-    specialty:    'Data & Financial Analysis',
+  SentimentBot: {
+    specialty:    'News & Social Sentiment Analysis',
     pricePerTask: 0.033,
-    description:  'Turns raw data into decisions. Runs comparisons, risk assessments, financial modelling, and trend analysis.',
+    description:  'Processes news feeds and social signals to measure market mood. Identifies bullish/bearish indicators and narrative shifts in real time.',
   },
-  WriterBot: {
-    specialty:    'Content & Communication',
+  ArbitrageBot: {
+    specialty:    'Cross-Market Price Discrepancy Detection',
+    pricePerTask: 0.035,
+    description:  'Detects price spreads and arbitrage windows across venues. Surfaces execution-ready signals with risk-adjusted spread analysis.',
+  },
+  PortfolioBot: {
+    specialty:    'Portfolio Analysis & Rebalancing',
     pricePerTask: 0.034,
-    description:  'Synthesizes outputs into clear, professional deliverables. Reports, summaries, client-ready content.',
+    description:  'Analyses portfolio composition, runs rebalancing scenarios, and delivers asset-allocation recommendations weighted by risk tolerance.',
+  },
+  PredictionBot: {
+    specialty:    'Event Research & Probability Scoring',
+    pricePerTask: 0.036,
+    description:  'Models upcoming events, scores probabilities, and maps scenario outcomes. Built for forward-looking risk assessment and forecasting.',
   },
 }
 
@@ -493,7 +503,7 @@ function MarketplaceTab({ onHire }: { onHire: (agentName: string) => void }) {
           You pay only if all three deliver.
         </p>
         <div className="flex items-center gap-2 mt-2 flex-wrap">
-          {['Planner', '→ ResearchBot', '→ AnalystBot', '→ WriterBot', '→ Synthesizer', '→ You'].map(s => (
+          {['Planner', '→ MarketResearchBot', '→ SentimentBot', '→ PortfolioBot', '→ Synthesizer', '→ You'].map(s => (
             <span key={s} className="font-mono text-[10px] text-arc-sub border border-arc-border rounded px-2 py-1">{s}</span>
           ))}
         </div>
@@ -725,7 +735,7 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
         </button>
         {submitting && (
           <p className="font-mono text-[10px] text-arc-muted">
-            Planner → ResearchBot (escrow) → AnalystBot (escrow) → WriterBot (escrow) → Synthesizer → Done
+            Planner → MarketResearchBot (escrow) → SentimentBot (escrow) → PortfolioBot (escrow) → Synthesizer → Done
           </p>
         )}
       </form>

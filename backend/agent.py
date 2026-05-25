@@ -115,9 +115,11 @@ def seed_registry(arc: BrewingArcClient) -> dict[str, AgentCard]:
     agents = {}
 
     specs = [
-        ("ResearchBot",  ["research", "market-analysis", "literature-review"]),
-        ("AnalystBot",   ["analysis", "defi", "risk-assessment", "competitive-analysis"]),
-        ("StrategyBot",  ["strategy", "product", "positioning", "roadmap"]),
+        ("MarketResearchBot", ["market-intelligence", "trading-signals", "research", "sector-analysis", "price-trends"]),
+        ("SentimentBot",      ["sentiment-analysis", "news-analysis", "social-signals", "nlp", "market-mood"]),
+        ("ArbitrageBot",      ["arbitrage", "price-discrepancy", "cross-market", "spread-detection", "execution-signals"]),
+        ("PortfolioBot",      ["portfolio-analysis", "rebalancing", "asset-allocation", "risk-management", "recommendations"]),
+        ("PredictionBot",     ["event-research", "probability-scoring", "forecasting", "scenario-analysis", "risk-prediction"]),
     ]
 
     for name, caps in specs:
@@ -127,7 +129,7 @@ def seed_registry(arc: BrewingArcClient) -> dict[str, AgentCard]:
             owner        = arc.account.address,   # human principal
             payment_addr = wallet.address,
             capabilities = caps,
-            endpoint     = f"http://localhost:8000/agents/{name.lower()}",
+            endpoint     = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:8000')}/agents/{name.lower()}",
         )
         agents[name] = card
         log(f"  ✓ {name} registered  wallet={wallet.address[:10]}… [{wallet.provider}]")

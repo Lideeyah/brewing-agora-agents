@@ -12,9 +12,9 @@ const STEPS = [
 ]
 
 const AGENTS = [
-  { name: 'ResearchBot',  specialty: 'Research & Analysis',   tags: ['market research', 'literature review', 'summarization'] },
-  { name: 'AnalystBot',   specialty: 'Data & Financial',      tags: ['data analysis', 'risk assessment', 'comparison'] },
-  { name: 'WriterBot',    specialty: 'Content & Synthesis',   tags: ['writing', 'reporting', 'communication'] },
+  { name: 'MarketResearchBot', specialty: 'Market Intelligence',        tags: ['trading signals', 'sector analysis', 'price trends'] },
+  { name: 'SentimentBot',      specialty: 'News & Social Sentiment',    tags: ['sentiment analysis', 'news signals', 'market mood'] },
+  { name: 'PortfolioBot',      specialty: 'Portfolio & Rebalancing',    tags: ['asset allocation', 'risk management', 'recommendations'] },
 ]
 
 export default function LandingPage() {
@@ -40,12 +40,6 @@ export default function LandingPage() {
               <span className="w-2 h-2 rounded-full bg-arc-green pulse-dot" />
               <span className="font-mono text-[11px] text-arc-green tracking-wide">Arc Testnet Live</span>
             </div>
-            <Link
-              to="/register-agent"
-              className="font-mono text-xs text-arc-sub border border-arc-border px-4 py-2 rounded-md hover:border-arc-amber hover:text-arc-amber transition-colors"
-            >
-              List Your Agent
-            </Link>
             <button
               onClick={() => navigate('/onboard')}
               className="font-mono text-xs text-arc-sub border border-arc-border px-4 py-2 rounded-md hover:border-arc-green hover:text-arc-green transition-colors"
@@ -63,18 +57,18 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero */}
-      <main className="flex-1 max-w-6xl mx-auto px-6 py-24 flex flex-col items-center text-center gap-8">
+      <main className="flex-1 max-w-6xl mx-auto px-6 py-36 flex flex-col items-center text-center gap-10">
         <div className="flex items-center gap-2 border border-arc-border rounded-full px-4 py-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-arc-green pulse-dot" />
           <span className="font-mono text-[10px] text-arc-green tracking-[0.15em]">CIRCLE ARC L1 · NATIVE USDC · SUB-SECOND FINALITY</span>
         </div>
 
-        <h1 className="text-5xl lg:text-6xl font-bold leading-[1.1] tracking-tight max-w-3xl">
+        <h1 className="text-6xl lg:text-7xl font-bold leading-[1.08] tracking-tight max-w-4xl">
           Hire any AI agent.{' '}
           <span className="text-arc-green">Pay only when it delivers.</span>
         </h1>
 
-        <p className="text-arc-sub text-lg leading-relaxed max-w-2xl">
+        <p className="text-arc-sub text-xl leading-relaxed max-w-2xl">
           The trust layer for the open agent economy. Any developer can list an agent.
           Any business can hire one. Payment locks in escrow and releases only when
           work is verified on-chain.
@@ -83,21 +77,21 @@ export default function LandingPage() {
         <div className="flex gap-4 mt-2 flex-wrap justify-center">
           <button
             onClick={() => navigate('/onboard')}
-            className="bg-arc-green text-black font-mono font-semibold text-sm px-8 py-3.5 rounded-lg hover:bg-emerald-400 transition-colors"
+            className="bg-arc-green text-black font-mono font-semibold text-sm px-10 py-4 rounded-lg hover:bg-emerald-400 transition-colors"
           >
             Get Started →
           </button>
           <button
-            onClick={() => navigate('/dashboard')}
-            className="border border-arc-border font-mono text-sm px-8 py-3.5 rounded-lg text-arc-sub hover:border-arc-green hover:text-arc-green transition-colors"
+            onClick={() => navigate('/register-agent')}
+            className="border border-arc-border font-mono text-sm px-10 py-4 rounded-lg text-arc-sub hover:border-arc-amber hover:text-arc-amber transition-colors"
           >
-            Browse Agents
+            List Your Agent
           </button>
         </div>
 
         {/* Live stats */}
         {stats && (
-          <div className="grid grid-cols-3 gap-6 mt-6 w-full max-w-xl">
+          <div className="grid grid-cols-3 gap-6 mt-4 w-full max-w-xl">
             {[
               { label: 'Jobs Completed', value: stats.totalJobsCompleted },
               { label: 'USDC Settled',   value: `$${stats.usdcSettled.toFixed(2)}` },
@@ -133,7 +127,7 @@ export default function LandingPage() {
 
       {/* Agent preview */}
       <div className="border-t border-arc-border">
-        <div className="max-w-6xl mx-auto px-6 py-16">
+        <div className="max-w-6xl mx-auto px-6 py-24">
           <div className="flex items-center justify-between mb-10">
             <div className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">AVAILABLE AGENTS</div>
             <button
@@ -173,7 +167,7 @@ export default function LandingPage() {
 
       {/* Trust strip */}
       <div className="border-t border-arc-border">
-        <div className="max-w-6xl mx-auto px-6 py-5 flex flex-wrap items-center justify-center gap-8">
+        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-wrap items-center justify-center gap-8">
           {[
             'Real USDC · Circle Arc L1',
             'Escrow enforced on-chain',
@@ -191,7 +185,7 @@ export default function LandingPage() {
 
       {/* Hackathon badge */}
       <div className="border-t border-arc-border">
-        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col items-center gap-4 text-center">
+        <div className="max-w-6xl mx-auto px-6 py-20 flex flex-col items-center gap-6 text-center">
           <div className="flex items-center gap-3 px-5 py-2 rounded-full border border-arc-amber/30 bg-arc-amber/5">
             <span className="font-mono text-[10px] text-arc-amber tracking-widest uppercase">🏆 Hackathon Submission</span>
           </div>
@@ -204,7 +198,7 @@ export default function LandingPage() {
             {' '}·{' '}
             <span className="text-arc-amber font-semibold">Native USDC Settlement</span>
           </p>
-          <div className="flex items-center gap-6 mt-1">
+          <div className="flex items-center gap-10 mt-2">
             {[
               { label: 'CANTEEN',  sub: 'Agora Hackathon' },
               { label: 'CIRCLE',   sub: 'Arc L1 · USDC' },
@@ -221,7 +215,7 @@ export default function LandingPage() {
 
       {/* Footer CTA */}
       <div className="border-t border-arc-border bg-arc-surface">
-        <div className="max-w-6xl mx-auto px-6 py-16 text-center flex flex-col gap-6 items-center">
+        <div className="max-w-6xl mx-auto px-6 py-24 text-center flex flex-col gap-6 items-center">
           <h2 className="font-mono text-2xl font-bold text-white">
             The Airbnb for AI agents.
           </h2>

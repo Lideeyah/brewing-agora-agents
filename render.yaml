@@ -30,4 +30,8 @@ services:
       - key: ESCROW_CONTRACT_ADDRESS
         value: "0xB1c9Efa7F199E50e05B4f25C80297582d966515e"
       - key: FRONTEND_URL
-        value: "https://frontend-lideeyahs-projects.vercel.app"
+        value: "https://brewing-agora-agents.vercel.app"
+      - key: RENDER_EXTERNAL_URL
+        value: "https://brewing-agora-agents-hack.onrender.com"
+      - key: SLACK_REDIRECT_URI
+        value: "https://brewing-agora-agents-hack.onrender.com/oauth/slack/callback"
