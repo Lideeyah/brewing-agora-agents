@@ -27,11 +27,13 @@ None of this exists today. Brewing builds it.
 ### I. Agent Commerce Protocol — Autonomous B2B Negotiation
 A Planner Agent needing a capability doesn't hardcode a worker. It queries Brewing's active registry, compares workers by on-chain track record, negotiates execution parameters, and commits the deal to escrow — fully autonomously. No human scheduling the handoff.
 
+**Smart Routing:** When a task is posted without a specific agent, a routing layer powered by Claude Haiku analyses the task description against all registered agent capabilities and decides in real time: single specialist, or full multi-agent pipeline. The routing decision is surfaced in the live stream before any work begins.
+
 ### II. AgentVaults — Economic Security & SLA Enforcement
 Funds lock the moment a job is posted. The escrow is the contract, not a promise. If the worker delivers and the employer approves, USDC moves to the worker in under a second. If the SLA deadline passes with no delivery, the contract slashes the job and refunds the employer. No arbitration. No appeals. No humans.
 
 ```
-create_job()  →  USDC locked  →  worker executes
+create_job()  →  USDC locked  →  worker executes  →  streams output live
                                       │
                           ┌───────────┴───────────┐
                      approved                  SLA breach
@@ -76,6 +78,24 @@ Where `volumeMultiplier` scales logarithmically — 50 completed jobs isn't 10×
 
 ---
 
+## Dashboard
+
+A full B2B employer interface, live on Arc Testnet.
+
+**Live Agent Streaming** — When a task is posted, the dashboard connects via Server-Sent Events and streams every agent's output token-by-token as Claude generates it. Routing decision → escrow lock → parallel agent execution → synthesis — all visible in real time, no polling.
+
+**Smart Task Routing** — The router analyses each task description against the registered agent registry and surfaces its decision before work begins: which single specialist is best matched, or why the full Planner → Workers → Synthesizer pipeline is needed.
+
+**Wallet Connect** — Connect MetaMask to Arc Testnet directly from the dashboard. One click adds the network and links your on-chain identity as the task employer. No separate sign-up flow.
+
+**Connected Data Sources** — Attach Google Drive files, Gmail threads, and Slack messages directly to tasks. Agents receive full document context alongside the task description.
+
+**Business Account** — Per-account view of Circle-managed wallet balance, connected MetaMask address, task history, total USDC spent, and success rate. All data pulled live from the chain.
+
+**Signed Receipts** — Every completed task produces a cryptographically signed PDF receipt: agent ID, job ID, settlement TX, USDC amount, output hash. Downloadable from the dashboard.
+
+---
+
 ## The Stack
 
 | Layer | Tech |
@@ -85,9 +105,10 @@ Where `volumeMultiplier` scales logarithmically — 50 completed jobs isn't 10×
 | Agent custody | Circle Developer-Controlled Wallets (MPC, keys never leave Circle HSM) |
 | AI agents | Claude claude-opus-4-5 — autonomous task execution loop |
 | Concurrency | `asyncio.Lock()` + 3.5s pacemaker — governed, enterprise-grade throughput |
+| Streaming | Server-Sent Events — real-time token-level agent output |
 | Tests | titanoboa — 22 tests, 0.38s |
-| Backend | FastAPI + web3.py |
-| Dashboard | React + Vite — live on-chain feed |
+| Backend | FastAPI + web3.py + AsyncAnthropic streaming |
+| Dashboard | React + Vite — live on-chain feed, code-split bundles |
 
 ---
 
@@ -108,10 +129,12 @@ pytest tests/ -v
 cp .env.example .env  # add ARC_RPC_URL + ANTHROPIC_API_KEY
 python3 -m backend.agent
 
-# Dashboard
-uvicorn backend.main:app --reload --port 8000 &
-cd app && npm install && npm run dev
-# → http://localhost:5173/arc
+# Backend
+uvicorn backend.main:app --reload --port 8000
+
+# Dashboard (separate terminal)
+cd frontend && npm install && npm run dev
+# → http://localhost:5173
 ```
 
 The live contract is already deployed. You don't need to redeploy to run the demo.
