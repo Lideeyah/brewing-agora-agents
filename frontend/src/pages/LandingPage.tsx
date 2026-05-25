@@ -34,7 +34,14 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="border-b border-arc-border sticky top-0 z-50 bg-black/90 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
-          <span className="font-mono font-bold text-sm tracking-[0.2em]">BREWING</span>
+          <div className="flex items-center gap-2">
+            <svg width="16" height="20" viewBox="0 0 16 20" fill="none" className="text-arc-green flex-shrink-0">
+              <path d="M5.5 1.5h5M6 1.5v5.2L1.2 14.8A2.5 2.5 0 003.5 18.5h9a2.5 2.5 0 002.3-3.7L10 6.7V1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              <circle cx="6.2" cy="14.5" r="0.9" fill="currentColor"/>
+              <circle cx="9.4" cy="12.8" r="0.65" fill="currentColor"/>
+            </svg>
+            <span className="font-mono font-bold text-sm tracking-[0.2em]">BREWING</span>
+          </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-arc-green pulse-dot" />

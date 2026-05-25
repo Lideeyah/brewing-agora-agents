@@ -1127,9 +1127,14 @@ export default function Dashboard() {
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate('/')}
-              className="font-mono font-bold text-sm tracking-[0.2em] hover:text-arc-green transition-colors"
+              className="flex items-center gap-2 hover:text-arc-green transition-colors"
             >
-              BREWING
+              <svg width="14" height="18" viewBox="0 0 16 20" fill="none" className="text-arc-green flex-shrink-0">
+                <path d="M5.5 1.5h5M6 1.5v5.2L1.2 14.8A2.5 2.5 0 003.5 18.5h9a2.5 2.5 0 002.3-3.7L10 6.7V1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                <circle cx="6.2" cy="14.5" r="0.9" fill="currentColor"/>
+                <circle cx="9.4" cy="12.8" r="0.65" fill="currentColor"/>
+              </svg>
+              <span className="font-mono font-bold text-sm tracking-[0.2em]">BREWING</span>
             </button>
             <span className="text-arc-border">/</span>
             <span className="font-mono text-xs text-arc-sub">
