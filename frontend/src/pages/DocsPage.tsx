@@ -10,9 +10,9 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div id={id} className="flex flex-col gap-4">
       <h2 className="font-mono text-sm font-bold text-white border-b border-arc-border pb-3">{title}</h2>
       {children}
     </div>
