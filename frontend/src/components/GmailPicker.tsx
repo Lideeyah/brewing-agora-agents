@@ -101,10 +101,7 @@ export default function GmailPicker({ onThreadsChange }: Props) {
   useEffect(() => {
     const saved = localStorage.getItem('gmail_token')
     if (saved && threads.length === 0) {
-      loadThreadList(saved).catch(() => {
-        localStorage.removeItem('gmail_token')
-        setToken(null)
-      })
+      loadThreadList(saved).catch(() => { /* show error in UI, don't clear token */ })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -176,7 +173,8 @@ export default function GmailPicker({ onThreadsChange }: Props) {
         if (res.status === 401) {
           localStorage.removeItem('gmail_token')
           setToken(null)
-          connect()
+          setError('Session expired — click Connect Gmail to reconnect')
+          return
         }
         throw new Error(`Gmail API ${res.status}`)
       }

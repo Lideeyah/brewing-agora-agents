@@ -98,10 +98,7 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
   useEffect(() => {
     const saved = localStorage.getItem('drive_token')
     if (saved && files.length === 0) {
-      loadFileList(saved).catch(() => {
-        localStorage.removeItem('drive_token')
-        setToken(null)
-      })
+      loadFileList(saved).catch(() => { /* show error in UI, don't clear token */ })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -164,7 +161,8 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
         if (res.status === 401) {
           localStorage.removeItem('drive_token')
           setToken(null)
-          connect()
+          setError('Session expired — click Connect Google Drive to reconnect')
+          return
         }
         throw new Error(`Drive API ${res.status}`)
       }
@@ -186,10 +184,9 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
     if (!res.ok) {
       if (res.status === 401) {
-        // Token expired — clear and prompt reconnect
         localStorage.removeItem('drive_token')
         setToken(null)
-        throw new Error(`Session expired — please reconnect Google Drive`)
+        throw new Error('Session expired — click Connect Google Drive to reconnect')
       }
       throw new Error(`Could not read "${file.name}" (${res.status})`)
     }
