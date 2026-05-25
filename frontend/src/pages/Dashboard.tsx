@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Document, Paragraph, TextRun, HeadingLevel, Packer } from 'docx'
 import DriveFilePicker, { type DriveFilePayload } from '../components/DriveFilePicker'
 import GmailPicker, { type GmailThreadPayload } from '../components/GmailPicker'
 import SearchModal from '../components/SearchModal'
@@ -123,28 +124,255 @@ function toPlainText(md: string): string {
     .trim()
 }
 
+// ── .docx generation ─────────────────────────────────────────────────────────
+
+async function buildDocx(title: string, intro: string, content: string): Promise<Blob> {
+  const lines = content.split('\n')
+  const children: Paragraph[] = []
+
+  if (intro.trim()) {
+    children.push(new Paragraph({ children: [new TextRun({ text: intro, italics: true, size: 22 })] }))
+    children.push(new Paragraph({}))
+  }
+
+  for (const line of lines) {
+    if (line.startsWith('### ')) {
+      children.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3 }))
+    } else if (line.startsWith('## ')) {
+      children.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2 }))
+    } else if (line.startsWith('# ')) {
+      children.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1 }))
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      children.push(new Paragraph({ text: line.slice(2), bullet: { level: 0 } }))
+    } else {
+      children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22 })] }))
+    }
+  }
+
+  const doc = new Document({
+    sections: [{ properties: {}, children }],
+    title,
+  })
+  return Packer.toBlob(doc)
+}
+
+function triggerDocxDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a   = document.createElement('a')
+  a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── Email modal ───────────────────────────────────────────────────────────────
+
+const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly'
+
+function EmailModal({ content, taskId, onClose }: { content: string; taskId: string; onClose: () => void }) {
+  const [to,      setTo]      = useState('')
+  const [subject, setSubject] = useState('Brewing AI Analysis')
+  const [intro,   setIntro]   = useState('')
+  const [status,  setStatus]  = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [errMsg,  setErrMsg]  = useState('')
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  const gmailToken = localStorage.getItem('gmail_send_token') || localStorage.getItem('gmail_token') || ''
+
+  const needsAuth = !gmailToken
+
+  const authorise = () => {
+    const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
+    sessionStorage.setItem('dashboard_tab', 'jobs')
+    sessionStorage.setItem('email_modal_pending', '1')
+    const params = new URLSearchParams({
+      client_id:     CLIENT_ID,
+      redirect_uri:  `${window.location.origin}/dashboard`,
+      response_type: 'token',
+      scope:         GMAIL_SEND_SCOPE,
+      prompt:        'select_account',
+      state:         'gmail_send_oauth',
+    })
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`
+  }
+
+  const send = async () => {
+    if (!to.trim()) { setErrMsg('Enter a recipient email'); return }
+    setStatus('sending'); setErrMsg('')
+    try {
+      const blob     = await buildDocx(subject, intro, toPlainText(content))
+      const docxB64  = await blobToBase64(blob)
+      const boundary = 'brew_' + Math.random().toString(36).slice(2)
+      const bodyText = intro.trim()
+        ? `${intro}\n\nPlease find the full analysis attached.`
+        : 'Please find the Brewing AI analysis attached.'
+
+      const rawMsg = [
+        `To: ${to.trim()}`,
+        `Subject: ${subject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/plain; charset=UTF-8',
+        '',
+        bodyText,
+        '',
+        `--${boundary}`,
+        'Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="brewing-analysis-${taskId}.docx"`,
+        '',
+        docxB64,
+        `--${boundary}--`,
+      ].join('\r\n')
+
+      const encoded = btoa(unescape(encodeURIComponent(rawMsg)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
+      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method:  'POST',
+        headers: {
+          Authorization:  `Bearer ${gmailToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ raw: encoded }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        if (res.status === 401) {
+          localStorage.removeItem('gmail_send_token')
+          setErrMsg('Session expired — click Authorise to reconnect')
+          setStatus('error'); return
+        }
+        throw new Error(err?.error?.message ?? `Gmail API ${res.status}`)
+      }
+      setStatus('sent')
+    } catch (e: unknown) {
+      setErrMsg((e as Error).message ?? 'Failed to send')
+      setStatus('error')
+    }
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={e => { if (e.target === overlayRef.current) onClose() }}
+    >
+      <div className="bg-arc-surface border border-arc-border rounded-xl w-full max-w-lg mx-4 p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-sm font-bold text-white">Send as .docx</span>
+          <button onClick={onClose} className="font-mono text-arc-muted hover:text-white text-lg leading-none">×</button>
+        </div>
+
+        {status === 'sent' ? (
+          <div className="font-mono text-arc-green text-sm py-4 text-center">✓ Email sent successfully</div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="font-mono text-[10px] text-arc-muted uppercase tracking-widest">To</label>
+                <input
+                  type="email"
+                  value={to}
+                  onChange={e => setTo(e.target.value)}
+                  placeholder="recipient@example.com"
+                  className="bg-black border border-arc-border rounded-lg px-3 py-2 font-mono text-xs text-white placeholder:text-arc-muted focus:outline-none focus:border-arc-green"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="font-mono text-[10px] text-arc-muted uppercase tracking-widest">Subject</label>
+                <input
+                  type="text"
+                  value={subject}
+                  onChange={e => setSubject(e.target.value)}
+                  className="bg-black border border-arc-border rounded-lg px-3 py-2 font-mono text-xs text-white focus:outline-none focus:border-arc-green"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="font-mono text-[10px] text-arc-muted uppercase tracking-widest">Introduction (optional)</label>
+                <textarea
+                  value={intro}
+                  onChange={e => setIntro(e.target.value)}
+                  rows={3}
+                  placeholder="Hi, please find the attached AI analysis…"
+                  className="bg-black border border-arc-border rounded-lg px-3 py-2 font-mono text-xs text-white placeholder:text-arc-muted focus:outline-none focus:border-arc-green resize-none"
+                />
+              </div>
+            </div>
+
+            {errMsg && <span className="font-mono text-[10px] text-red-400">{errMsg}</span>}
+
+            <div className="flex gap-2 justify-end">
+              <button onClick={onClose} className="font-mono text-[10px] text-arc-muted border border-arc-border rounded-lg px-4 py-2 hover:text-white transition-colors">
+                Cancel
+              </button>
+              {needsAuth ? (
+                <button onClick={authorise} className="font-mono text-[10px] text-black bg-arc-green rounded-lg px-4 py-2 hover:bg-arc-green/80 transition-colors">
+                  Authorise Gmail Send
+                </button>
+              ) : (
+                <button
+                  onClick={send}
+                  disabled={status === 'sending'}
+                  className="font-mono text-[10px] text-black bg-arc-green rounded-lg px-4 py-2 hover:bg-arc-green/80 transition-colors disabled:opacity-50"
+                >
+                  {status === 'sending' ? 'Sending…' : 'Send Email'}
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload  = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
+// ── ResultActions ─────────────────────────────────────────────────────────────
+
 function ResultActions({ content, taskId }: { content: string; taskId: string }) {
   const [driveStatus, setDriveStatus] = useState<'idle' | 'saving' | 'saved' | 'reconnect'>('idle')
+  const [emailOpen,   setEmailOpen]   = useState(false)
+
+  // Parse gmail_send token from OAuth redirect
+  useEffect(() => {
+    const hash = window.location.hash.substring(1)
+    if (!hash) return
+    const params = new URLSearchParams(hash)
+    if (params.get('state') !== 'gmail_send_oauth') return
+    const token = params.get('access_token')
+    if (token) {
+      localStorage.setItem('gmail_send_token', token)
+      window.history.replaceState({}, '', window.location.pathname + window.location.search)
+      if (sessionStorage.getItem('email_modal_pending') === '1') {
+        sessionStorage.removeItem('email_modal_pending')
+        setEmailOpen(true)
+      }
+    }
+  }, [])
 
   // Clear stale readonly-only token so user reconnects with drive.file scope
   useEffect(() => {
     const token = localStorage.getItem('drive_token')
     const scopes = localStorage.getItem('drive_scopes') ?? ''
     if (token && !scopes.includes('drive.file')) {
-      // Token predates write scope — wipe it so the picker re-prompts
       localStorage.removeItem('drive_token')
       localStorage.setItem('drive_scopes', '')
     }
   }, [])
 
-  const download = () => {
-    const blob = new Blob([toPlainText(content)], { type: 'text/plain' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href     = url
-    a.download = `brewing-analysis-${taskId}.txt`
-    a.click()
-    URL.revokeObjectURL(url)
+  const downloadDocx = async () => {
+    const blob = await buildDocx(`Brewing Analysis — ${taskId}`, '', toPlainText(content))
+    triggerDocxDownload(blob, `brewing-analysis-${taskId}.docx`)
   }
 
   const saveToDrive = async () => {
@@ -188,44 +416,41 @@ function ResultActions({ content, taskId }: { content: string; taskId: string })
     }
   }
 
-  const openEmail = () => {
-    const subject = encodeURIComponent('Brewing AI Analysis')
-    const body    = encodeURIComponent(toPlainText(content).slice(0, 1800))
-    window.open(`mailto:?subject=${subject}&body=${body}`)
-  }
-
   return (
-    <div className="flex items-center gap-2 flex-wrap pt-1">
-      <span className="font-mono text-[10px] text-arc-muted">Export:</span>
-      <button
-        onClick={download}
-        className="flex items-center gap-1.5 font-mono text-[10px] text-arc-sub border border-arc-border rounded-lg px-3 py-1.5 hover:border-arc-green hover:text-arc-green transition-colors"
-      >
-        ↓ Download .txt
-      </button>
-      <button
-        onClick={saveToDrive}
-        disabled={driveStatus === 'saving'}
-        title={driveStatus === 'reconnect' ? 'Reconnect Google Drive on the Post Task tab to enable saving' : ''}
-        className={`flex items-center gap-1.5 font-mono text-[10px] border rounded-lg px-3 py-1.5 transition-colors ${
-          driveStatus === 'saved'     ? 'text-arc-green border-arc-green/30 bg-arc-green/5' :
-          driveStatus === 'reconnect' ? 'text-arc-amber border-arc-amber/30' :
-          driveStatus === 'saving'    ? 'text-arc-muted border-arc-border cursor-wait' :
-          'text-arc-sub border-arc-border hover:border-arc-green hover:text-arc-green'
-        }`}
-      >
-        {driveStatus === 'saving'    ? '⟳ Saving…'          :
-         driveStatus === 'saved'     ? '✓ Saved to Drive'    :
-         driveStatus === 'reconnect' ? '↺ Reconnect Drive'   :
-                                       '↑ Save to Drive'}
-      </button>
-      <button
-        onClick={openEmail}
-        className="flex items-center gap-1.5 font-mono text-[10px] text-arc-sub border border-arc-border rounded-lg px-3 py-1.5 hover:border-arc-green hover:text-arc-green transition-colors"
-      >
-        ✉ Send via Email
-      </button>
-    </div>
+    <>
+      {emailOpen && <EmailModal content={content} taskId={taskId} onClose={() => setEmailOpen(false)} />}
+      <div className="flex items-center gap-2 flex-wrap pt-1">
+        <span className="font-mono text-[10px] text-arc-muted">Export:</span>
+        <button
+          onClick={downloadDocx}
+          className="flex items-center gap-1.5 font-mono text-[10px] text-arc-sub border border-arc-border rounded-lg px-3 py-1.5 hover:border-arc-green hover:text-arc-green transition-colors"
+        >
+          ↓ Download .docx
+        </button>
+        <button
+          onClick={saveToDrive}
+          disabled={driveStatus === 'saving'}
+          title={driveStatus === 'reconnect' ? 'Reconnect Google Drive on the Post Task tab to enable saving' : ''}
+          className={`flex items-center gap-1.5 font-mono text-[10px] border rounded-lg px-3 py-1.5 transition-colors ${
+            driveStatus === 'saved'     ? 'text-arc-green border-arc-green/30 bg-arc-green/5' :
+            driveStatus === 'reconnect' ? 'text-arc-amber border-arc-amber/30' :
+            driveStatus === 'saving'    ? 'text-arc-muted border-arc-border cursor-wait' :
+            'text-arc-sub border-arc-border hover:border-arc-green hover:text-arc-green'
+          }`}
+        >
+          {driveStatus === 'saving'    ? '⟳ Saving…'          :
+           driveStatus === 'saved'     ? '✓ Saved to Drive'    :
+           driveStatus === 'reconnect' ? '↺ Reconnect Drive'   :
+                                         '↑ Save to Drive'}
+        </button>
+        <button
+          onClick={() => setEmailOpen(true)}
+          className="flex items-center gap-1.5 font-mono text-[10px] text-arc-sub border border-arc-border rounded-lg px-3 py-1.5 hover:border-arc-green hover:text-arc-green transition-colors"
+        >
+          ✉ Send as .docx
+        </button>
+      </div>
+    </>
   )
 }
 
