@@ -168,16 +168,54 @@ function triggerDocxDownload(blob: Blob, filename: string) {
 const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly'
 
 function EmailModal({ content, taskId, onClose }: { content: string; taskId: string; onClose: () => void }) {
-  const [to,      setTo]      = useState('')
-  const [subject, setSubject] = useState('Brewing AI Analysis')
-  const [intro,   setIntro]   = useState('')
-  const [status,  setStatus]  = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
-  const [errMsg,  setErrMsg]  = useState('')
+  const [to,           setTo]           = useState('')
+  const [subject,      setSubject]      = useState('Brewing AI Analysis')
+  const [intro,        setIntro]        = useState('')
+  const [status,       setStatus]       = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [errMsg,       setErrMsg]       = useState('')
+  const [contacts,     setContacts]     = useState<string[]>([])
+  const [showDrop,     setShowDrop]     = useState(false)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const toInputRef = useRef<HTMLInputElement>(null)
 
   const gmailToken = localStorage.getItem('gmail_send_token') || localStorage.getItem('gmail_token') || ''
 
   const needsAuth = !gmailToken
+
+  // Load recent recipients from sent mail
+  useEffect(() => {
+    if (!gmailToken) return
+    ;(async () => {
+      try {
+        const res = await fetch(
+          'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:sent&maxResults=50',
+          { headers: { Authorization: `Bearer ${gmailToken}` } }
+        )
+        if (!res.ok) return
+        const data = await res.json()
+        const msgs: { id: string }[] = data.messages ?? []
+        const emails = new Set<string>()
+        await Promise.all(msgs.slice(0, 20).map(async m => {
+          try {
+            const r = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=To`,
+              { headers: { Authorization: `Bearer ${gmailToken}` } }
+            )
+            if (!r.ok) return
+            const d = await r.json()
+            const headers: { name: string; value: string }[] = d.payload?.headers ?? []
+            const toHeader = headers.find(h => h.name === 'To')?.value ?? ''
+            toHeader.split(',').map(s => s.trim()).filter(Boolean).forEach(e => emails.add(e))
+          } catch { /* skip */ }
+        }))
+        setContacts([...emails].slice(0, 40))
+      } catch { /* contacts unavailable */ }
+    })()
+  }, [gmailToken])
+
+  const filteredContacts = to.trim()
+    ? contacts.filter(c => c.toLowerCase().includes(to.toLowerCase()))
+    : contacts.slice(0, 8)
 
   const authorise = () => {
     const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
@@ -270,15 +308,33 @@ function EmailModal({ content, taskId, onClose }: { content: string; taskId: str
         ) : (
           <>
             <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-1 relative">
                 <label className="font-mono text-[10px] text-arc-muted uppercase tracking-widest">To</label>
                 <input
-                  type="email"
+                  ref={toInputRef}
+                  type="text"
                   value={to}
-                  onChange={e => setTo(e.target.value)}
-                  placeholder="recipient@example.com"
+                  onChange={e => { setTo(e.target.value); setShowDrop(true) }}
+                  onFocus={() => setShowDrop(true)}
+                  onBlur={() => setTimeout(() => setShowDrop(false), 150)}
+                  placeholder="Search contacts or type email…"
+                  autoComplete="off"
                   className="bg-black border border-arc-border rounded-lg px-3 py-2 font-mono text-xs text-white placeholder:text-arc-muted focus:outline-none focus:border-arc-green"
                 />
+                {showDrop && filteredContacts.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-arc-surface border border-arc-border rounded-lg shadow-xl z-50 overflow-hidden max-h-48 overflow-y-auto">
+                    {filteredContacts.map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onMouseDown={() => { setTo(c); setShowDrop(false) }}
+                        className="w-full text-left px-3 py-2 font-mono text-xs text-white hover:bg-arc-green/10 hover:text-arc-green truncate"
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex flex-col gap-1">
                 <label className="font-mono text-[10px] text-arc-muted uppercase tracking-widest">Subject</label>
