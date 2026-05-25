@@ -5,7 +5,6 @@ import remarkGfm from 'remark-gfm'
 import { Document, Paragraph, TextRun, HeadingLevel, Packer } from 'docx'
 import DriveFilePicker, { type DriveFilePayload } from '../components/DriveFilePicker'
 import GmailPicker, { type GmailThreadPayload } from '../components/GmailPicker'
-import SearchModal from '../components/SearchModal'
 
 const API      = import.meta.env.VITE_ARC_API_URL ?? 'http://localhost:8000'
 const EXPLORER = 'https://testnet.arcscan.app'
@@ -970,21 +969,6 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
   const [driveFiles, setDriveFiles]   = useState<DriveFilePayload[]>([])
   const [gmailThreads, setGmailThreads] = useState<GmailThreadPayload[]>([])
   const [slackMessages, setSlackMessages] = useState<SlackMessagePayload[]>([])
-  const [searchOpen, setSearchOpen]   = useState(false)
-  const [modalDrive, setModalDrive]   = useState<DriveFilePayload[]>([])
-  const [modalGmail, setModalGmail]   = useState<GmailThreadPayload[]>([])
-
-  // Cmd+K / Ctrl+K opens search modal
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        setSearchOpen(true)
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
 
   const employerAddress = localStorage.getItem('brewing_employer_address') || ''
   const employerName    = localStorage.getItem('brewing_employer_name') || ''
@@ -998,14 +982,6 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
     if (!desc.trim() || submitting) return
     setSub(true); setError(''); setResult(null)
 
-    // Merge picker + modal selections, deduplicated by name/subject
-    const pickerDriveNames = new Set(driveFiles.map(f => f.name))
-    const allDriveFiles    = [...driveFiles, ...modalDrive.filter(f => !pickerDriveNames.has(f.name))]
-    const pickerGmailSubjects = new Set(gmailThreads.map(t => t.subject))
-    const allGmailThreads  = [...gmailThreads, ...modalGmail.filter(t => !pickerGmailSubjects.has(t.subject))]
-
-    // Switch to Active Jobs immediately — task is saved to Redis before Claude runs,
-    // so polling will show it within seconds.
     onTaskPosted()
 
     fetch(`${API}/api/tasks`, {
@@ -1018,8 +994,8 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
         employer_address: employerAddress,
         employer_name:    employerName,
         selected_agent:   preselectedAgent ?? '',
-        drive_files:      allDriveFiles,
-        gmail_threads:    allGmailThreads,
+        drive_files:      driveFiles,
+        gmail_threads:    gmailThreads,
         slack_messages:   slackMessages,
       }),
       signal: AbortSignal.timeout(180_000),
@@ -1060,17 +1036,6 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
             <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">
               Data Sources <span className="text-arc-muted normal-case tracking-normal">(optional — agents will read from connected sources)</span>
             </label>
-            <button
-              type="button"
-              onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-1.5 font-mono text-[10px] text-arc-sub border border-arc-border rounded-lg px-3 py-1.5 hover:border-arc-green hover:text-arc-green transition-colors"
-            >
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              Search
-              <kbd className="font-mono text-[9px] text-arc-muted border border-arc-border/60 rounded px-1 py-0.5">⌘K</kbd>
-            </button>
           </div>
 
           {/* Google Drive */}
@@ -1091,26 +1056,6 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
             <SlackConnect onMessagesChange={setSlackMessages} />
           </div>
 
-          {/* Modal selection summary */}
-          {(modalDrive.length > 0 || modalGmail.length > 0) && (
-            <div className="flex items-center gap-2 flex-wrap pt-1">
-              <span className="font-mono text-[10px] text-arc-muted">Via search:</span>
-              {modalDrive.map(f => (
-                <div key={f.name} className="flex items-center gap-1 border border-arc-green/20 rounded-full px-2.5 py-1 bg-arc-green/5">
-                  <span className="font-mono text-[9px] text-arc-muted uppercase">DOC</span>
-                  <span className="font-mono text-[10px] text-arc-green truncate max-w-[120px]">{f.name}</span>
-                  <button type="button" onClick={() => setModalDrive(d => d.filter(x => x.name !== f.name))} className="text-arc-muted hover:text-white font-mono text-[10px]">×</button>
-                </div>
-              ))}
-              {modalGmail.map(t => (
-                <div key={t.subject} className="flex items-center gap-1 border border-arc-amber/20 rounded-full px-2.5 py-1 bg-arc-amber/5">
-                  <span className="font-mono text-[9px] text-arc-amber uppercase">GMAIL</span>
-                  <span className="font-mono text-[10px] text-arc-amber truncate max-w-[120px]">{t.subject}</span>
-                  <button type="button" onClick={() => setModalGmail(g => g.filter(x => x.subject !== t.subject))} className="text-arc-muted hover:text-white font-mono text-[10px]">×</button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Budget + Deadline */}
@@ -1177,11 +1122,6 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
         )}
       </form>
 
-      <SearchModal
-        isOpen={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onSelect={(drive, gmail) => { setModalDrive(drive); setModalGmail(gmail) }}
-      />
 
       {/* Result */}
       {result && result.status === 'completed' && (
