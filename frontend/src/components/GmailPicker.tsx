@@ -75,6 +75,8 @@ export default function GmailPicker({ onThreadsChange }: Props) {
   const [listLoading,  setListLoading]  = useState(false)
   const [selectingAll, setSelectingAll] = useState(false)
   const [error,        setError]        = useState<string | null>(null)
+  const [search,       setSearch]       = useState('')
+  const [searching,    setSearching]    = useState(false)
 
   // Parse token from URL hash after redirect-based OAuth
   useEffect(() => {
@@ -120,9 +122,50 @@ export default function GmailPicker({ onThreadsChange }: Props) {
     window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`
   }
 
+  const searchThreads = async (q: string) => {
+    if (!token || !q.trim()) return
+    setSearching(true); setError(null)
+    try {
+      const params = new URLSearchParams({ maxResults: '20', q: q.trim() })
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      if (!res.ok) throw new Error(`Gmail API ${res.status}`)
+      const data = await res.json()
+      const rawThreads = data.threads ?? []
+      const enriched: GmailThread[] = await Promise.all(
+        rawThreads.slice(0, 20).map(async (t: { id: string }) => {
+          try {
+            const r = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            )
+            if (!r.ok) return { id: t.id, snippet: '', subject: t.id }
+            const d = await r.json()
+            const msgs = d.messages ?? []
+            const firstMsg = msgs[0] ?? {}
+            const headers = firstMsg.payload?.headers ?? []
+            return {
+              id:      t.id,
+              snippet: firstMsg.snippet ?? '',
+              subject: getHeader(headers, 'Subject') || '(no subject)',
+            }
+          } catch { return { id: t.id, snippet: '', subject: t.id } }
+        })
+      )
+      setThreads(enriched)
+    } catch (e: unknown) {
+      setError((e as Error).message ?? 'Search failed')
+    } finally {
+      setSearching(false)
+    }
+  }
+
   const loadThreadList = async (accessToken: string) => {
     setListLoading(true)
     setError(null)
+    setSearch('')
     try {
       const params = new URLSearchParams({ maxResults: '30', q: 'in:inbox' })
       const res = await fetch(
@@ -301,9 +344,41 @@ export default function GmailPicker({ onThreadsChange }: Props) {
         </button>
       </div>
 
+      {/* Search input */}
+      <form
+        onSubmit={e => { e.preventDefault(); searchThreads(search) }}
+        className="flex items-center gap-2"
+      >
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search Gmail…"
+          className="flex-1 bg-arc-surface border border-arc-border rounded-lg px-3 py-1.5 font-mono text-xs text-white placeholder:text-arc-muted focus:outline-none focus:border-arc-green"
+        />
+        <button
+          type="submit"
+          disabled={!search.trim() || searching}
+          className="font-mono text-[10px] text-black bg-arc-green rounded-lg px-3 py-1.5 hover:bg-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {searching ? '⟳' : 'Search'}
+        </button>
+        {search && (
+          <button
+            type="button"
+            onClick={() => { setSearch(''); loadThreadList(token!) }}
+            className="font-mono text-[10px] text-arc-muted hover:text-white transition-colors"
+          >
+            Clear
+          </button>
+        )}
+      </form>
+
       <div className="border border-arc-border rounded-lg overflow-hidden">
-        {listLoading ? (
-          <div className="px-4 py-6 text-center font-mono text-xs text-arc-muted">Loading threads…</div>
+        {listLoading || searching ? (
+          <div className="px-4 py-6 text-center font-mono text-xs text-arc-muted">
+            {searching ? 'Searching…' : 'Loading threads…'}
+          </div>
         ) : threads.length === 0 ? (
           <div className="px-4 py-6 text-center font-mono text-xs text-arc-muted">No threads found</div>
         ) : (
