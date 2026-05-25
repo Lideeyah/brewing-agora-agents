@@ -360,6 +360,149 @@ function SlackConnect({ onMessagesChange }: { onMessagesChange: (msgs: SlackMess
   )
 }
 
+// ── Register Agent Modal ──────────────────────────────────────────────────────
+
+const ALL_CAPS = [
+  { id: 'research',   label: 'Research' },
+  { id: 'analysis',   label: 'Analysis' },
+  { id: 'writing',    label: 'Writing' },
+  { id: 'data',       label: 'Data' },
+  { id: 'strategy',   label: 'Strategy' },
+  { id: 'coding',     label: 'Coding' },
+  { id: 'legal',      label: 'Legal' },
+  { id: 'finance',    label: 'Finance' },
+  { id: 'sentiment',  label: 'Sentiment' },
+  { id: 'portfolio',  label: 'Portfolio' },
+  { id: 'forecasting',label: 'Forecasting' },
+]
+
+function RegisterAgentModal({ onClose, onRegistered }: { onClose: () => void; onRegistered: (agent: AgentCard) => void }) {
+  const [name,       setName]  = useState('')
+  const [specialty,  setSpec]  = useState('')
+  const [desc,       setDesc]  = useState('')
+  const [price,      setPrice] = useState('0.033')
+  const [wallet,     setWallet]= useState('')
+  const [caps,       setCaps]  = useState<string[]>([])
+  const [submitting, setSub]   = useState(false)
+  const [error,      setError] = useState('')
+
+  const toggleCap = (id: string) =>
+    setCaps(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!name.trim() || !wallet.trim() || caps.length === 0) return
+    setSub(true); setError('')
+    try {
+      const res = await fetch(`${API}/api/agents/register`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          name:           name.trim(),
+          description:    desc.trim(),
+          capabilities:   caps,
+          payment_addr:   wallet.trim(),
+          price_per_task: parseFloat(price) || 0.033,
+        }),
+      })
+      if (!res.ok) { const d = await res.json(); throw new Error(d.detail ?? 'Registration failed') }
+      const agent = await res.json()
+      onRegistered(agent)
+      onClose()
+    } catch (err: unknown) {
+      setError((err as Error).message)
+    } finally {
+      setSub(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="w-full max-w-lg bg-black border border-arc-border rounded-2xl flex flex-col max-h-[90vh] overflow-y-auto">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-arc-border sticky top-0 bg-black z-10">
+          <div>
+            <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-0.5">OPEN AGENT MARKETPLACE</div>
+            <h2 className="font-mono text-base font-bold text-white">List Your Agent</h2>
+          </div>
+          <button onClick={onClose} className="font-mono text-arc-muted hover:text-white transition-colors text-lg leading-none">✕</button>
+        </div>
+
+        <form onSubmit={submit} className="flex flex-col gap-5 px-6 py-6">
+
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Agent Name</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. LegalBot, DataBot" required
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors" />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Specialty</label>
+            <input type="text" value={specialty} onChange={e => setSpec(e.target.value)} placeholder="e.g. Contract Analysis & Risk Review"
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors" />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Description</label>
+            <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="What does your agent do? What makes it better?" rows={3}
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors resize-none" />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">
+              Capabilities <span className="normal-case tracking-normal text-arc-muted">(select all that apply)</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {ALL_CAPS.map(cap => (
+                <button key={cap.id} type="button" onClick={() => toggleCap(cap.id)}
+                  className={`font-mono text-[11px] px-3 py-1.5 rounded-lg border transition-colors ${
+                    caps.includes(cap.id)
+                      ? 'bg-arc-green/10 border-arc-green text-arc-green'
+                      : 'border-arc-border text-arc-muted hover:border-arc-green/50 hover:text-arc-sub'
+                  }`}>
+                  {cap.label}
+                </button>
+              ))}
+            </div>
+            {caps.length === 0 && <span className="font-mono text-[10px] text-arc-muted">Select at least one</span>}
+          </div>
+
+          <div className="flex gap-4">
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Price / Task (USDC)</label>
+              <input type="number" min="0.001" step="0.001" value={price} onChange={e => setPrice(e.target.value)}
+                className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white focus:outline-none focus:border-arc-green transition-colors" />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">Arc Wallet Address</label>
+            <input type="text" value={wallet} onChange={e => setWallet(e.target.value)} placeholder="0x…" required
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors" />
+            <span className="font-mono text-[10px] text-arc-muted">USDC paid here via AgentEscrow on Arc L1</span>
+          </div>
+
+          {error && (
+            <div className="border border-red-500/20 rounded-lg px-4 py-3 bg-red-500/5">
+              <span className="font-mono text-xs text-red-400">{error}</span>
+            </div>
+          )}
+
+          <button type="submit" disabled={submitting || !name.trim() || !wallet.trim() || caps.length === 0}
+            className={`font-mono font-semibold text-sm px-6 py-3 rounded-lg transition-all ${
+              submitting || !name.trim() || !wallet.trim() || caps.length === 0
+                ? 'bg-arc-surface border border-arc-border text-arc-muted cursor-not-allowed'
+                : 'bg-arc-green text-black hover:bg-emerald-400'
+            }`}>
+            {submitting ? '⟳ Registering…' : 'List Agent on Brewing →'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 // ── Tab 1: Marketplace ────────────────────────────────────────────────────────
 
 const AGENT_META: Record<string, { specialty: string; pricePerTask: number; description: string }> = {
@@ -391,8 +534,9 @@ const AGENT_META: Record<string, { specialty: string; pricePerTask: number; desc
 }
 
 function MarketplaceTab({ onHire }: { onHire: (agentName: string) => void }) {
-  const [agents, setAgents] = useState<AgentCard[]>([])
-  const [loading, setLoad]  = useState(true)
+  const [agents,     setAgents] = useState<AgentCard[]>([])
+  const [loading,    setLoad]   = useState(true)
+  const [showModal,  setModal]  = useState(false)
 
   useEffect(() => {
     fetch(`${API}/api/agents`)
@@ -401,6 +545,8 @@ function MarketplaceTab({ onHire }: { onHire: (agentName: string) => void }) {
       .catch(() => null)
       .finally(() => setLoad(false))
   }, [])
+
+  const handleRegistered = (agent: AgentCard) => setAgents(prev => [agent, ...prev])
 
   if (loading) return <div className="font-mono text-xs text-arc-muted mt-8">Loading agents…</div>
 
@@ -411,12 +557,22 @@ function MarketplaceTab({ onHire }: { onHire: (agentName: string) => void }) {
   )
 
   return (
+    <>
+    {showModal && <RegisterAgentModal onClose={() => setModal(false)} onRegistered={handleRegistered} />}
     <div className="flex flex-col gap-6">
-      <div>
-        <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-1">AGENT MARKETPLACE</div>
-        <p className="font-mono text-[12px] text-arc-sub">
-          Hire specialized AI agents. Payment is locked in escrow before work begins — released only when it's done.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-1">AGENT MARKETPLACE</div>
+          <p className="font-mono text-[12px] text-arc-sub">
+            Hire specialized AI agents. Payment is locked in escrow before work begins — released only when it's done.
+          </p>
+        </div>
+        <button
+          onClick={() => setModal(true)}
+          className="flex-shrink-0 font-mono text-xs border border-arc-amber/40 text-arc-amber px-4 py-2 rounded-lg hover:bg-arc-amber/5 transition-colors"
+        >
+          + List Your Agent
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -509,6 +665,7 @@ function MarketplaceTab({ onHire }: { onHire: (agentName: string) => void }) {
         </div>
       </div>
     </div>
+    </>
   )
 }
 
