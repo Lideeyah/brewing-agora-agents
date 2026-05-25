@@ -27,7 +27,7 @@ def _get(key: str) -> str | None:
 
 
 def _set(key: str, value: str):
-    body = json.dumps(["SET", key, value]).encode()
+    body = json.dumps([["SET", key, value]]).encode()
     req = urllib.request.Request(
         f"{_url}/pipeline",
         data=body,
