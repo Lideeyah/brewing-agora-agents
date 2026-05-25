@@ -177,9 +177,11 @@ function EmailModal({ content, taskId, onClose }: { content: string; taskId: str
   const overlayRef = useRef<HTMLDivElement>(null)
   const toInputRef = useRef<HTMLInputElement>(null)
 
-  const gmailToken = localStorage.getItem('gmail_send_token') || localStorage.getItem('gmail_token') || ''
+  const gmailSendToken = localStorage.getItem('gmail_send_token') || ''
+  // Fall back to readonly token only for loading contacts; sending requires send scope
+  const gmailToken = gmailSendToken || localStorage.getItem('gmail_token') || ''
 
-  const needsAuth = !gmailToken
+  const needsAuth = !gmailSendToken
 
   // Load recent recipients from sent mail
   useEffect(() => {
