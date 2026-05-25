@@ -22,8 +22,11 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 
+from backend.store import read as store_read, write as store_write
+
 _data_dir = Path(os.getenv("DATA_DIR", str(Path(__file__).parent.parent)))
 REGISTRY_FILE = _data_dir / "agent_registry.json"
+STORE_KEY = "brewing:registry"
 
 
 # ── Agent Card (ERC-8004 inspired) ────────────────────────────────────────────
@@ -169,20 +172,16 @@ class AgentRegistry:
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def save(self):
-        """Write registry to disk so agent cards survive restarts."""
         data = {aid: asdict(card) for aid, card in self._cards.items()}
-        REGISTRY_FILE.write_text(json.dumps(data, indent=2))
+        store_write(STORE_KEY, REGISTRY_FILE, data)
 
     def load(self):
-        """Restore registry from disk if it exists."""
-        if not REGISTRY_FILE.exists():
-            return
         try:
-            data = json.loads(REGISTRY_FILE.read_text())
+            data = store_read(STORE_KEY, REGISTRY_FILE)
             for aid, d in data.items():
                 self._cards[aid] = AgentCard(**d)
         except Exception:
-            pass  # corrupt file — start fresh
+            pass
 
     def to_dict(self) -> list[dict]:
         return [asdict(c) for c in self.all()]

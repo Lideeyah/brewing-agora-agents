@@ -8,8 +8,11 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
+from backend.store import read as store_read, write as store_write
+
 _data_dir = Path(os.getenv("DATA_DIR", str(Path(__file__).parent.parent)))
 TASKS_FILE = _data_dir / "tasks.json"
+STORE_KEY  = "brewing:tasks"
 
 
 @dataclass
@@ -65,13 +68,11 @@ class TaskStore:
 
     def _persist(self):
         data = {tid: asdict(t) for tid, t in self._tasks.items()}
-        TASKS_FILE.write_text(json.dumps(data, indent=2))
+        store_write(STORE_KEY, TASKS_FILE, data)
 
     def _load(self):
-        if not TASKS_FILE.exists():
-            return
         try:
-            data = json.loads(TASKS_FILE.read_text())
+            data = store_read(STORE_KEY, TASKS_FILE)
             for tid, d in data.items():
                 self._tasks[tid] = TaskRecord(**d)
         except Exception:
