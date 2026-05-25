@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 
-REGISTRY_FILE = Path(__file__).parent.parent / "agent_registry.json"
+_data_dir = Path(os.getenv("DATA_DIR", str(Path(__file__).parent.parent)))
+REGISTRY_FILE = _data_dir / "agent_registry.json"
 
 
 # ── Agent Card (ERC-8004 inspired) ────────────────────────────────────────────

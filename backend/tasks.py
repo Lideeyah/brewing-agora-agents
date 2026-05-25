@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
-TASKS_FILE = Path(__file__).parent.parent / "tasks.json"
+_data_dir = Path(os.getenv("DATA_DIR", str(Path(__file__).parent.parent)))
+TASKS_FILE = _data_dir / "tasks.json"
 
 
 @dataclass
