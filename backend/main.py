@@ -86,9 +86,10 @@ class PostTaskRequest(BaseModel):
     deadline_hours:   int   = 24
     employer_address: str   = ""
     employer_name:    str   = ""
-    drive_files:      list  = []  # [{name: str, content: str}]
-    gmail_threads:    list  = []  # [{subject: str, content: str}]
-    slack_messages:   list  = []  # [{channel: str, content: str}]
+    selected_agent:   str   = ""   # agent name chosen in marketplace; empty = pipeline
+    drive_files:      list  = []   # [{name: str, content: str}]
+    gmail_threads:    list  = []   # [{subject: str, content: str}]
+    slack_messages:   list  = []   # [{channel: str, content: str}]
 
 class PostJobRequest(BaseModel):
     worker:          str
@@ -221,15 +222,8 @@ async def post_task(req: PostTaskRequest):
         ai   = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
         loop = asyncio.get_running_loop()
 
-        # ── Locate the three pipeline agents ──────────────────────────────────
-        by_name          = {a.name: a for a in registry.all()}
-        market_research_bot = by_name.get("MarketResearchBot")
-        sentiment_bot       = by_name.get("SentimentBot")
-        portfolio_bot       = by_name.get("PortfolioBot")
-
-        if not all([market_research_bot, sentiment_bot, portfolio_bot]):
-            missing = [n for n, a in [("MarketResearchBot", market_research_bot), ("SentimentBot", sentiment_bot), ("PortfolioBot", portfolio_bot)] if not a]
-            raise ValueError(f"Required agents not in registry: {missing}")
+        # ── Locate agents ─────────────────────────────────────────────────────
+        by_name = {a.name: a for a in registry.all()}
 
         # ── Build context from all connected data sources ─────────────────
         context_sections: list[str] = []
@@ -278,53 +272,18 @@ async def post_task(req: PostTaskRequest):
             + "\n\n---\n\n".join(context_sections)
         ) if context_sections else ""
 
-        # ── Step 1: Planner breaks task into 3 sub-tasks ─────────────────────
-        plan_resp = await loop.run_in_executor(None, lambda: ai.messages.create(
-            model      = "claude-haiku-4-5-20251001",
-            max_tokens = 600,
-            messages   = [{
-                "role":    "user",
-                "content": (
-                    f"You are a task planner. Break this client task into 3 focused sub-tasks.\n\n"
-                    f"Task: {req.description}"
-                    f"{file_context}\n\n"
-                    "Return JSON only — no extra text:\n"
-                    '{"market_research": "sub-task for MarketResearchBot: gather market intelligence, price trends, sector data", '
-                    '"sentiment": "sub-task for SentimentBot: analyse news and social signals, measure market mood", '
-                    '"portfolio": "sub-task for PortfolioBot: synthesise findings into portfolio recommendations and risk-adjusted conclusions"}'
-                ),
-            }],
-        ))
-        raw_plan = plan_resp.content[0].text.strip()
-        m        = _re.search(r'\{.*\}', raw_plan, _re.DOTALL)
-        try:
-            plan = _json.loads(m.group()) if m else {}
-        except Exception:
-            plan = {}
-
-        sub_descriptions = {
-            "MarketResearchBot": plan.get("market_research") or f"Research market intelligence, price trends, and sector data for: {req.description}",
-            "SentimentBot":      plan.get("sentiment")       or f"Analyse news and social signals, measure market mood for: {req.description}",
-            "PortfolioBot":      plan.get("portfolio")       or f"Synthesise findings into portfolio recommendations and risk-adjusted conclusions for: {req.description}",
-        }
-
-        # ── Steps 2–4: Each agent gets its own escrow, runs, settles ─────────
-        sub_budget   = round(req.budget_usdc / 3, 6)
         employer_key = os.getenv("ARC_PRIVATE_KEY", "")
-        pipeline     = [
-            (market_research_bot, "market_research"),
-            (sentiment_bot,       "sentiment"),
-            (portfolio_bot,       "portfolio"),
-        ]
         task.subtasks = []
-        agent_outputs: dict[str, str] = {}
 
-        for agent, task_type in pipeline:
-            sub_desc = sub_descriptions[agent.name]
+        # ── Single-agent path (employer hired a specific agent) ───────────────
+        if req.selected_agent:
+            agent = by_name.get(req.selected_agent)
+            if not agent:
+                raise ValueError(f"Agent '{req.selected_agent}' not found in registry")
 
             sub = {
                 "agent_name":  agent.name,
-                "description": sub_desc,
+                "description": req.description,
                 "status":      "locking",
                 "job_id":      None,
                 "create_tx":   None,
@@ -334,10 +293,9 @@ async def post_task(req: PostTaskRequest):
             task.subtasks.append(sub)
             task_store.update(task)
 
-            # Lock escrow for this sub-task
             escrow = await client.post_job(
                 worker          = agent.payment_addr,
-                usdc_amount     = sub_budget,
+                usdc_amount     = req.budget_usdc,
                 timeout_seconds = req.deadline_hours * 3600,
             )
             sub["job_id"]    = escrow["job_id"]
@@ -345,42 +303,23 @@ async def post_task(req: PostTaskRequest):
             sub["status"]    = "working"
             task_store.update(task)
 
-            # Agent runs its sub-task — via webhook if registered, otherwise Claude
-            if agent.webhook_url:
-                output = await _call_webhook(
-                    agent,
-                    task_id          = task.task_id,
-                    description      = sub_desc,
-                    budget_usdc      = sub_budget,
-                    employer_address = employer_addr,
-                    file_context     = file_context,
-                )
-            else:
-                agent_name_cap = agent.name
-                work = await loop.run_in_executor(None, lambda d=sub_desc, n=agent_name_cap: ai.messages.create(
-                    model      = "claude-opus-4-5",
-                    max_tokens = 500,
-                    messages   = [{
-                        "role":    "user",
-                        "content": (
-                            f"You are {n}, a specialized AI agent. "
-                            f"Complete this sub-task professionally:\n\n{d}"
-                            f"{file_context}"
-                        ),
-                    }],
-                ))
-                output = work.content[0].text.strip()
-            sub["result"]               = output
-            agent_outputs[agent.name]   = output
+            output = await _call_webhook(
+                agent,
+                task_id          = task.task_id,
+                description      = req.description,
+                budget_usdc      = req.budget_usdc,
+                employer_address = employer_addr,
+                file_context     = file_context,
+            )
+
+            sub["result"] = output
             task_store.update(task)
 
-            # Settle escrow → USDC released to agent
             settle_tx        = await client.complete_job(sub["job_id"])
             sub["settle_tx"] = settle_tx
             sub["status"]    = "completed"
             task_store.update(task)
 
-            # Sign receipt for this sub-task
             if employer_key:
                 receipt = sign_receipt(
                     job_id          = sub["job_id"],
@@ -388,38 +327,161 @@ async def post_task(req: PostTaskRequest):
                     employer_key    = employer_key,
                     worker_addr     = agent.payment_addr,
                     worker_agent_id = agent.agent_id,
-                    task_type       = task_type,
+                    task_type       = "task",
                     output_text     = output,
-                    amount_usdc     = sub_budget,
+                    amount_usdc     = req.budget_usdc,
                     tx_hash         = settle_tx,
                 )
                 receipt_store.save(receipt)
 
             registry.record_completion(agent.agent_id)
+            task.result       = output
+            task.status       = "completed"
+            task.completed_at = int(time.time())
+            task_store.update(task)
 
-        # ── Step 5: Synthesizer combines all three outputs ────────────────────
-        combined = "\n\n".join(
-            f"[{name}]\n{out}" for name, out in agent_outputs.items()
-        )
-        synth = await loop.run_in_executor(None, lambda: ai.messages.create(
-            model      = "claude-opus-4-5",
-            max_tokens = 700,
-            messages   = [{
-                "role":    "user",
-                "content": (
-                    f"Three specialist agents have completed sub-tasks for a client. "
-                    f"Synthesize their outputs into one coherent, professional response.\n\n"
-                    f"Original client task: {req.description}\n\n"
-                    f"{combined}\n\n"
-                    "Write the final unified response now:"
-                ),
-            }],
-        ))
+        # ── Multi-agent pipeline (no specific agent selected) ─────────────────
+        else:
+            market_research_bot = by_name.get("MarketResearchBot")
+            sentiment_bot       = by_name.get("SentimentBot")
+            portfolio_bot       = by_name.get("PortfolioBot")
 
-        task.result       = synth.content[0].text.strip()
-        task.status       = "completed"
-        task.completed_at = int(time.time())
-        task_store.update(task)
+            if not all([market_research_bot, sentiment_bot, portfolio_bot]):
+                missing = [n for n, a in [("MarketResearchBot", market_research_bot), ("SentimentBot", sentiment_bot), ("PortfolioBot", portfolio_bot)] if not a]
+                raise ValueError(f"Required pipeline agents not in registry: {missing}")
+
+            # Step 1: Planner breaks task into 3 sub-tasks
+            plan_resp = await loop.run_in_executor(None, lambda: ai.messages.create(
+                model      = "claude-haiku-4-5-20251001",
+                max_tokens = 600,
+                messages   = [{
+                    "role":    "user",
+                    "content": (
+                        f"You are a task planner. Break this client task into 3 focused sub-tasks.\n\n"
+                        f"Task: {req.description}"
+                        f"{file_context}\n\n"
+                        "Return JSON only — no extra text:\n"
+                        '{"market_research": "sub-task for MarketResearchBot: gather market intelligence, price trends, sector data", '
+                        '"sentiment": "sub-task for SentimentBot: analyse news and social signals, measure market mood", '
+                        '"portfolio": "sub-task for PortfolioBot: synthesise findings into portfolio recommendations and risk-adjusted conclusions"}'
+                    ),
+                }],
+            ))
+            raw_plan = plan_resp.content[0].text.strip()
+            m        = _re.search(r'\{.*\}', raw_plan, _re.DOTALL)
+            try:
+                plan = _json.loads(m.group()) if m else {}
+            except Exception:
+                plan = {}
+
+            sub_descriptions = {
+                "MarketResearchBot": plan.get("market_research") or f"Research market intelligence, price trends, and sector data for: {req.description}",
+                "SentimentBot":      plan.get("sentiment")       or f"Analyse news and social signals, measure market mood for: {req.description}",
+                "PortfolioBot":      plan.get("portfolio")       or f"Synthesise findings into portfolio recommendations and risk-adjusted conclusions for: {req.description}",
+            }
+
+            sub_budget = round(req.budget_usdc / 3, 6)
+            pipeline   = [
+                (market_research_bot, "market_research"),
+                (sentiment_bot,       "sentiment"),
+                (portfolio_bot,       "portfolio"),
+            ]
+            agent_outputs: dict[str, str] = {}
+
+            for agent, task_type in pipeline:
+                sub_desc = sub_descriptions[agent.name]
+                sub = {
+                    "agent_name":  agent.name,
+                    "description": sub_desc,
+                    "status":      "locking",
+                    "job_id":      None,
+                    "create_tx":   None,
+                    "settle_tx":   None,
+                    "result":      None,
+                }
+                task.subtasks.append(sub)
+                task_store.update(task)
+
+                escrow = await client.post_job(
+                    worker          = agent.payment_addr,
+                    usdc_amount     = sub_budget,
+                    timeout_seconds = req.deadline_hours * 3600,
+                )
+                sub["job_id"]    = escrow["job_id"]
+                sub["create_tx"] = escrow["create_tx"]
+                sub["status"]    = "working"
+                task_store.update(task)
+
+                if agent.webhook_url:
+                    output = await _call_webhook(
+                        agent,
+                        task_id          = task.task_id,
+                        description      = sub_desc,
+                        budget_usdc      = sub_budget,
+                        employer_address = employer_addr,
+                        file_context     = file_context,
+                    )
+                else:
+                    agent_name_cap = agent.name
+                    work = await loop.run_in_executor(None, lambda d=sub_desc, n=agent_name_cap: ai.messages.create(
+                        model      = "claude-opus-4-5",
+                        max_tokens = 500,
+                        messages   = [{
+                            "role":    "user",
+                            "content": (
+                                f"You are {n}, a specialized AI agent. "
+                                f"Complete this sub-task professionally:\n\n{d}"
+                                f"{file_context}"
+                            ),
+                        }],
+                    ))
+                    output = work.content[0].text.strip()
+
+                sub["result"]             = output
+                agent_outputs[agent.name] = output
+                task_store.update(task)
+
+                settle_tx        = await client.complete_job(sub["job_id"])
+                sub["settle_tx"] = settle_tx
+                sub["status"]    = "completed"
+                task_store.update(task)
+
+                if employer_key:
+                    receipt = sign_receipt(
+                        job_id          = sub["job_id"],
+                        employer_addr   = client.account.address,
+                        employer_key    = employer_key,
+                        worker_addr     = agent.payment_addr,
+                        worker_agent_id = agent.agent_id,
+                        task_type       = task_type,
+                        output_text     = output,
+                        amount_usdc     = sub_budget,
+                        tx_hash         = settle_tx,
+                    )
+                    receipt_store.save(receipt)
+
+                registry.record_completion(agent.agent_id)
+
+            # Step 5: Synthesizer combines all three outputs
+            combined = "\n\n".join(f"[{name}]\n{out}" for name, out in agent_outputs.items())
+            synth = await loop.run_in_executor(None, lambda: ai.messages.create(
+                model      = "claude-opus-4-5",
+                max_tokens = 700,
+                messages   = [{
+                    "role":    "user",
+                    "content": (
+                        f"Three specialist agents have completed sub-tasks for a client. "
+                        f"Synthesize their outputs into one coherent, professional response.\n\n"
+                        f"Original client task: {req.description}\n\n"
+                        f"{combined}\n\n"
+                        "Write the final unified response now:"
+                    ),
+                }],
+            ))
+            task.result       = synth.content[0].text.strip()
+            task.status       = "completed"
+            task.completed_at = int(time.time())
+            task_store.update(task)
 
         return asdict(task)
 

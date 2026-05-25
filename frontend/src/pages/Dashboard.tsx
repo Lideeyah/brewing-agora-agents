@@ -961,6 +961,7 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
         deadline_hours:   parseInt(deadline) || 24,
         employer_address: employerAddress,
         employer_name:    employerName,
+        selected_agent:   preselectedAgent ?? '',
         drive_files:      allDriveFiles,
         gmail_threads:    allGmailThreads,
         slack_messages:   slackMessages,
@@ -977,7 +978,7 @@ function PostTaskTab({ preselectedAgent, onTaskPosted }: { preselectedAgent?: st
         <div className="font-mono text-[9px] text-arc-muted tracking-widest uppercase mb-1">POST A TASK</div>
         <p className="font-mono text-[12px] text-arc-sub">
           {preselectedAgent
-            ? `Hiring ${preselectedAgent}. Brewing will route your task through the full 3-agent pipeline and deliver a synthesized result.`
+            ? `Hiring ${preselectedAgent}. Your task will be sent directly to this agent's webhook. USDC is locked in escrow and released on delivery.`
             : 'Describe what you need. Brewing selects the best agents, locks USDC in escrow, and releases payment only when the work is done.'
           }
         </p>
