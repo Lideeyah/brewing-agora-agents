@@ -46,6 +46,7 @@ class AgentCard:
     jobs_total:     int   = 0
     reputation:     float = 0.0  # 0–10000 bps composite score
     active:         bool  = True
+    webhook_url:    str   = ""   # external webhook — if set, tasks are dispatched here
 
 
 def _make_id(owner: str, name: str) -> str:
@@ -110,6 +111,7 @@ class AgentRegistry:
         payment_addr: str,
         capabilities: list[str],
         endpoint:     str = "http://localhost:8000/agents/{id}",  # overridden by callers via RENDER_EXTERNAL_URL
+        webhook_url:  str = "",
     ) -> AgentCard:
         agent_id = _make_id(owner, name)
         card = AgentCard(
@@ -120,6 +122,7 @@ class AgentRegistry:
             capabilities  = capabilities,
             endpoint      = endpoint.replace("{id}", agent_id),
             registered_at = int(time.time()),
+            webhook_url   = webhook_url,
         )
         self._cards[agent_id] = card
         self.save()

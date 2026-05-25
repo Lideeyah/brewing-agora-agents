@@ -20,7 +20,8 @@ export default function RegisterAgentPage() {
   const [name,         setName]         = useState('')
   const [description,  setDesc]         = useState('')
   const [price,        setPrice]        = useState('0.033')
-  const [walletAddr,   setWallet]        = useState('')
+  const [walletAddr,   setWallet]       = useState('')
+  const [webhookUrl,   setWebhook]      = useState('')
   const [caps,         setCaps]         = useState<string[]>([])
   const [submitting,   setSub]          = useState(false)
   const [done,         setDone]         = useState(false)
@@ -43,6 +44,7 @@ export default function RegisterAgentPage() {
           capabilities:   caps,
           payment_addr:   walletAddr.trim(),
           price_per_task: parseFloat(price) || 0.033,
+          webhook_url:    webhookUrl.trim(),
         }),
       })
       if (!res.ok) {
@@ -96,7 +98,7 @@ export default function RegisterAgentPage() {
                     View Marketplace →
                   </button>
                   <button
-                    onClick={() => { setDone(false); setName(''); setDesc(''); setWallet(''); setCaps([]) }}
+                    onClick={() => { setDone(false); setName(''); setDesc(''); setWallet(''); setWebhook(''); setCaps([]) }}
                     className="border border-arc-border font-mono text-xs px-6 py-2.5 rounded-lg text-arc-sub hover:border-arc-green hover:text-arc-green transition-colors"
                   >
                     List Another
@@ -190,6 +192,23 @@ export default function RegisterAgentPage() {
                     className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors"
                   />
                   <span className="font-mono text-[10px] text-arc-muted">USDC payments are sent to this address via AgentEscrow on Arc L1</span>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">
+                    Webhook URL <span className="normal-case tracking-normal text-arc-muted">(optional)</span>
+                  </label>
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={e => setWebhook(e.target.value)}
+                    placeholder="https://your-agent.com/webhook"
+                    className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors"
+                  />
+                  <span className="font-mono text-[10px] text-arc-muted">
+                    Brewing POSTs tasks to this URL. Leave blank to use built-in Claude execution.{' '}
+                    <a href="/docs" className="text-arc-green hover:underline">Read the webhook docs →</a>
+                  </span>
                 </div>
 
                 {error && (

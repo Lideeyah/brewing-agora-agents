@@ -101,6 +101,7 @@ class RegisterAgentRequest(BaseModel):
     capabilities:   list[str]
     payment_addr:   str
     price_per_task: float = 0.033
+    webhook_url:    str   = ""
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -160,6 +161,36 @@ async def onboard(req: OnboardRequest):
         "balance_usdc":   0.0,
         "existing":       False,
     }
+
+# ── Webhook dispatch ─────────────────────────────────────────────────────────
+
+async def _call_webhook(
+    agent,
+    task_id:          str,
+    description:      str,
+    budget_usdc:      float,
+    employer_address: str,
+    file_context:     str = "",
+) -> str:
+    """POST task to external agent webhook; return result text."""
+    import httpx
+    payload = {
+        "task_id":          task_id,
+        "description":      description + (f"\n\nContext:\n{file_context}" if file_context else ""),
+        "budget_usdc":      budget_usdc,
+        "employer_address": employer_address,
+        "agent_id":         agent.agent_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120) as hc:
+            resp = await hc.post(agent.webhook_url, json=payload)
+        data = resp.json()
+        if isinstance(data, dict):
+            return data.get("result") or data.get("output") or str(data)
+        return str(data)
+    except Exception as exc:
+        raise ValueError(f"Webhook call to {agent.webhook_url} failed: {exc}") from exc
+
 
 # ── Task marketplace ──────────────────────────────────────────────────────────
 
@@ -314,21 +345,31 @@ async def post_task(req: PostTaskRequest):
             sub["status"]    = "working"
             task_store.update(task)
 
-            # Agent runs its sub-task (with access to Drive file contents)
-            agent_name_cap = agent.name
-            work = await loop.run_in_executor(None, lambda d=sub_desc, n=agent_name_cap: ai.messages.create(
-                model      = "claude-opus-4-5",
-                max_tokens = 500,
-                messages   = [{
-                    "role":    "user",
-                    "content": (
-                        f"You are {n}, a specialized AI agent. "
-                        f"Complete this sub-task professionally:\n\n{d}"
-                        f"{file_context}"
-                    ),
-                }],
-            ))
-            output                      = work.content[0].text.strip()
+            # Agent runs its sub-task — via webhook if registered, otherwise Claude
+            if agent.webhook_url:
+                output = await _call_webhook(
+                    agent,
+                    task_id          = task.task_id,
+                    description      = sub_desc,
+                    budget_usdc      = sub_budget,
+                    employer_address = employer_addr,
+                    file_context     = file_context,
+                )
+            else:
+                agent_name_cap = agent.name
+                work = await loop.run_in_executor(None, lambda d=sub_desc, n=agent_name_cap: ai.messages.create(
+                    model      = "claude-opus-4-5",
+                    max_tokens = 500,
+                    messages   = [{
+                        "role":    "user",
+                        "content": (
+                            f"You are {n}, a specialized AI agent. "
+                            f"Complete this sub-task professionally:\n\n{d}"
+                            f"{file_context}"
+                        ),
+                    }],
+                ))
+                output = work.content[0].text.strip()
             sub["result"]               = output
             agent_outputs[agent.name]   = output
             task_store.update(task)
@@ -489,6 +530,7 @@ async def register_agent(req: RegisterAgentRequest):
         payment_addr = req.payment_addr,
         capabilities = req.capabilities,
         endpoint     = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:8000')}/agents/{agent_id}",
+        webhook_url  = req.webhook_url,
     )
     import dataclasses
     d = dataclasses.asdict(card)

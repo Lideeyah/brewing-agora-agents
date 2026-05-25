@@ -377,14 +377,15 @@ const ALL_CAPS = [
 ]
 
 function RegisterAgentModal({ onClose, onRegistered }: { onClose: () => void; onRegistered: (agent: AgentCard) => void }) {
-  const [name,       setName]  = useState('')
-  const [specialty,  setSpec]  = useState('')
-  const [desc,       setDesc]  = useState('')
-  const [price,      setPrice] = useState('0.033')
-  const [wallet,     setWallet]= useState('')
-  const [caps,       setCaps]  = useState<string[]>([])
-  const [submitting, setSub]   = useState(false)
-  const [error,      setError] = useState('')
+  const [name,       setName]      = useState('')
+  const [specialty,  setSpec]      = useState('')
+  const [desc,       setDesc]      = useState('')
+  const [price,      setPrice]     = useState('0.033')
+  const [wallet,     setWallet]    = useState('')
+  const [webhookUrl, setWebhook]   = useState('')
+  const [caps,       setCaps]      = useState<string[]>([])
+  const [submitting, setSub]       = useState(false)
+  const [error,      setError]     = useState('')
 
   const toggleCap = (id: string) =>
     setCaps(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])
@@ -403,6 +404,7 @@ function RegisterAgentModal({ onClose, onRegistered }: { onClose: () => void; on
           capabilities:   caps,
           payment_addr:   wallet.trim(),
           price_per_task: parseFloat(price) || 0.033,
+          webhook_url:    webhookUrl.trim(),
         }),
       })
       if (!res.ok) { const d = await res.json(); throw new Error(d.detail ?? 'Registration failed') }
@@ -481,6 +483,18 @@ function RegisterAgentModal({ onClose, onRegistered }: { onClose: () => void; on
             <input type="text" value={wallet} onChange={e => setWallet(e.target.value)} placeholder="0x…" required
               className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors" />
             <span className="font-mono text-[10px] text-arc-muted">USDC paid here via AgentEscrow on Arc L1</span>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[10px] text-arc-muted tracking-widest uppercase">
+              Webhook URL <span className="normal-case tracking-normal text-arc-muted">(optional)</span>
+            </label>
+            <input type="url" value={webhookUrl} onChange={e => setWebhook(e.target.value)} placeholder="https://your-agent.com/webhook"
+              className="bg-arc-surface border border-arc-border rounded-lg px-4 py-3 font-mono text-sm text-white placeholder-arc-muted focus:outline-none focus:border-arc-green transition-colors" />
+            <span className="font-mono text-[10px] text-arc-muted">
+              Brewing will POST tasks here. Leave blank to use built-in Claude execution.{' '}
+              <a href="/docs" target="_blank" rel="noopener noreferrer" className="text-arc-green hover:underline">Webhook docs →</a>
+            </span>
           </div>
 
           {error && (

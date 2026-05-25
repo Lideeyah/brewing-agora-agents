@@ -3,6 +3,7 @@ import LandingPage from './pages/LandingPage'
 import OnboardingPage from './pages/OnboardingPage'
 import Dashboard from './pages/Dashboard'
 import RegisterAgentPage from './pages/RegisterAgentPage'
+import DocsPage from './pages/DocsPage'
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
         <Route path="/onboard" element={<OnboardingPage />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/register-agent" element={<RegisterAgentPage />} />
+        <Route path="/docs" element={<DocsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
