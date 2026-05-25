@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { silentRefreshGoogle } from '../utils/silentRefresh'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const SCOPE     = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
@@ -74,12 +75,26 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
   const [search,       setSearch]      = useState('')
   const [searching,    setSearching]   = useState(false)
 
-  // Parse token from URL hash after redirect-based OAuth
+  // Parse token from URL hash after redirect-based OAuth (including silent refresh popup)
   useEffect(() => {
     const hash = window.location.hash.substring(1)
     if (!hash) return
     const params = new URLSearchParams(hash)
-    if (params.get('state') !== STATE_KEY) return
+    const state = params.get('state') ?? ''
+
+    // Silent refresh popup: post token back to opener and close
+    if (window.opener && state === STATE_KEY + '_silent') {
+      window.opener?.postMessage({
+        type:  'google_silent_token',
+        state,
+        token: params.get('access_token'),
+        error: params.get('error'),
+      }, window.location.origin)
+      window.close()
+      return
+    }
+
+    if (state !== STATE_KEY) return
     const accessToken = params.get('access_token')
     if (!accessToken) {
       const err = params.get('error')
@@ -141,7 +156,7 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
     }
   }
 
-  const loadFileList = async (accessToken: string) => {
+  const loadFileList = async (accessToken: string, isRetry = false) => {
     setListLoading(true)
     setError(null)
     setSearch('')
@@ -158,7 +173,14 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
         headers: { Authorization: `Bearer ${accessToken}` },
       })
       if (!res.ok) {
-        if (res.status === 401) {
+        if (res.status === 401 && !isRetry) {
+          try {
+            const fresh = await silentRefreshGoogle(CLIENT_ID, SCOPE, STATE_KEY)
+            localStorage.setItem('drive_token', fresh)
+            setToken(fresh)
+            await loadFileList(fresh, true)
+            return
+          } catch { /* silent refresh failed */ }
           localStorage.removeItem('drive_token')
           setToken(null)
           setError('Session expired — click Connect Google Drive to reconnect')
@@ -175,7 +197,7 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
     }
   }
 
-  const fetchContent = async (file: DriveFile, accessToken: string): Promise<string> => {
+  const fetchContent = async (file: DriveFile, accessToken: string, isRetry = false): Promise<string> => {
     const exportMime = EXPORT_MIME[file.mimeType]
     const url = exportMime
       ? `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${encodeURIComponent(exportMime)}&supportsAllDrives=true`
@@ -183,10 +205,11 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
 
     const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
     if (!res.ok) {
-      if (res.status === 401) {
-        localStorage.removeItem('drive_token')
-        setToken(null)
-        throw new Error('Session expired — click Connect Google Drive to reconnect')
+      if (res.status === 401 && !isRetry) {
+        const fresh = await silentRefreshGoogle(CLIENT_ID, SCOPE, STATE_KEY)
+        localStorage.setItem('drive_token', fresh)
+        setToken(fresh)
+        return fetchContent(file, fresh, true)
       }
       throw new Error(`Could not read "${file.name}" (${res.status})`)
     }

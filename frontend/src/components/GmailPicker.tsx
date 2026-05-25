@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { silentRefreshGoogle } from '../utils/silentRefresh'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const SCOPE     = 'https://www.googleapis.com/auth/gmail.readonly'
@@ -78,12 +79,26 @@ export default function GmailPicker({ onThreadsChange }: Props) {
   const [search,       setSearch]       = useState('')
   const [searching,    setSearching]    = useState(false)
 
-  // Parse token from URL hash after redirect-based OAuth
+  // Parse token from URL hash after redirect-based OAuth (including silent refresh popup)
   useEffect(() => {
     const hash = window.location.hash.substring(1)
     if (!hash) return
     const params = new URLSearchParams(hash)
-    if (params.get('state') !== STATE_KEY) return
+    const state = params.get('state') ?? ''
+
+    // Silent refresh popup: post token back to opener and close
+    if (window.opener && state === STATE_KEY + '_silent') {
+      window.opener?.postMessage({
+        type:  'google_silent_token',
+        state,
+        token: params.get('access_token'),
+        error: params.get('error'),
+      }, window.location.origin)
+      window.close()
+      return
+    }
+
+    if (state !== STATE_KEY) return
     const accessToken = params.get('access_token')
     if (!accessToken) {
       const err = params.get('error')
@@ -159,7 +174,7 @@ export default function GmailPicker({ onThreadsChange }: Props) {
     }
   }
 
-  const loadThreadList = async (accessToken: string) => {
+  const loadThreadList = async (accessToken: string, isRetry = false) => {
     setListLoading(true)
     setError(null)
     setSearch('')
@@ -170,7 +185,14 @@ export default function GmailPicker({ onThreadsChange }: Props) {
         { headers: { Authorization: `Bearer ${accessToken}` } }
       )
       if (!res.ok) {
-        if (res.status === 401) {
+        if (res.status === 401 && !isRetry) {
+          try {
+            const fresh = await silentRefreshGoogle(CLIENT_ID, SCOPE, STATE_KEY)
+            localStorage.setItem('gmail_token', fresh)
+            setToken(fresh)
+            await loadThreadList(fresh, true)
+            return
+          } catch { /* silent refresh failed — fall through to show reconnect */ }
           localStorage.removeItem('gmail_token')
           setToken(null)
           setError('Session expired — click Connect Gmail to reconnect')
@@ -211,12 +233,20 @@ export default function GmailPicker({ onThreadsChange }: Props) {
     }
   }
 
-  const fetchThreadContent = async (threadId: string, accessToken: string): Promise<string> => {
+  const fetchThreadContent = async (threadId: string, accessToken: string, isRetry = false): Promise<string> => {
     const res = await fetch(
       `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     )
-    if (!res.ok) throw new Error(`Could not read thread (${res.status})`)
+    if (!res.ok) {
+      if (res.status === 401 && !isRetry) {
+        const fresh = await silentRefreshGoogle(CLIENT_ID, SCOPE, STATE_KEY)
+        localStorage.setItem('gmail_token', fresh)
+        setToken(fresh)
+        return fetchThreadContent(threadId, fresh, true)
+      }
+      throw new Error(`Could not read thread (${res.status})`)
+    }
     const data = await res.json()
     const messages = data.messages ?? []
 
