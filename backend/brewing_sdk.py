@@ -153,7 +153,7 @@ class BrewingArcClient:
         })
         signed  = self.account.sign_transaction(tx)
         tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        return tx_hash.hex()
+        return "0x" + tx_hash.hex()
 
     async def _rpc(self, fn):
         """Rate-limited synchronous call wrapped in executor."""
