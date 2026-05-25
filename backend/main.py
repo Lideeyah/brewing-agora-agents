@@ -108,12 +108,14 @@ class RegisterAgentRequest(BaseModel):
 
 @app.get("/health")
 async def health():
+    from backend.store import USE_REDIS
     return {
-        "status":   "ok",
-        "network":  "arc-testnet",
-        "agents":   len(registry.all()),
-        "tasks":    len(task_store.all()),
-        "receipts": len(receipt_store.all()),
+        "status":    "ok",
+        "network":   "arc-testnet",
+        "storage":   "redis" if USE_REDIS else "ephemeral-file",
+        "agents":    len(registry.all()),
+        "tasks":     len(task_store.all()),
+        "receipts":  len(receipt_store.all()),
     }
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
