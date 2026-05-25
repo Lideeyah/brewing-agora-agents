@@ -94,17 +94,20 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
     if (!gisReady || !CLIENT_ID) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope:     SCOPE,
-      callback:  async (resp: { access_token?: string; error?: string }) => {
+      client_id:      CLIENT_ID,
+      scope:          SCOPE,
+      callback:       async (resp: { access_token?: string; error?: string }) => {
         if (resp.error || !resp.access_token) {
-          setError('Sign-in cancelled or failed')
+          setError(`Sign-in failed: ${resp.error ?? 'no token returned'}`)
           return
         }
         localStorage.setItem('drive_token', resp.access_token)
         localStorage.setItem('drive_scopes', SCOPE)
         setToken(resp.access_token)
         await loadFileList(resp.access_token)
+      },
+      error_callback: (err: { type: string; message?: string }) => {
+        setError(`Google error: ${err.type}${err.message ? ' — ' + err.message : ''}`)
       },
     })
   }, [gisReady])
@@ -123,7 +126,7 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
 
   const connect = () => {
     setError(null)
-    tokenClientRef.current?.requestAccessToken({ prompt: '' })
+    tokenClientRef.current?.requestAccessToken({ prompt: 'select_account' })
   }
 
   const loadFileList = async (accessToken: string) => {
@@ -143,7 +146,7 @@ export default function DriveFilePicker({ onFilesChange }: Props) {
         if (res.status === 401) {
           localStorage.removeItem('drive_token')
           setToken(null)
-          tokenClientRef.current?.requestAccessToken({ prompt: '' })
+          tokenClientRef.current?.requestAccessToken({ prompt: 'select_account' })
         }
         throw new Error(`Drive API ${res.status}`)
       }

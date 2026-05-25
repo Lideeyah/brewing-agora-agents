@@ -99,16 +99,19 @@ export default function GmailPicker({ onThreadsChange }: Props) {
     if (!gisReady || !CLIENT_ID) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope:     SCOPE,
-      callback:  async (resp: { access_token?: string; error?: string }) => {
+      client_id:      CLIENT_ID,
+      scope:          SCOPE,
+      callback:       async (resp: { access_token?: string; error?: string }) => {
         if (resp.error || !resp.access_token) {
-          setError('Sign-in cancelled or failed')
+          setError(`Sign-in failed: ${resp.error ?? 'no token returned'}`)
           return
         }
         localStorage.setItem('gmail_token', resp.access_token)
         setToken(resp.access_token)
         await loadThreadList(resp.access_token)
+      },
+      error_callback: (err: { type: string; message?: string }) => {
+        setError(`Google error: ${err.type}${err.message ? ' — ' + err.message : ''}`)
       },
     })
   }, [gisReady])
@@ -127,7 +130,7 @@ export default function GmailPicker({ onThreadsChange }: Props) {
 
   const connect = () => {
     setError(null)
-    tokenClientRef.current?.requestAccessToken({ prompt: '' })
+    tokenClientRef.current?.requestAccessToken({ prompt: 'select_account' })
   }
 
   const loadThreadList = async (accessToken: string) => {
@@ -146,7 +149,7 @@ export default function GmailPicker({ onThreadsChange }: Props) {
         if (res.status === 401) {
           localStorage.removeItem('gmail_token')
           setToken(null)
-          tokenClientRef.current?.requestAccessToken({ prompt: '' })
+          tokenClientRef.current?.requestAccessToken({ prompt: 'select_account' })
         }
         throw new Error(`Gmail API ${res.status}`)
       }
