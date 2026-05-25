@@ -45,7 +45,9 @@ def read(key: str, file_path: Path) -> dict:
         try:
             raw = _get(key)
             return json.loads(raw) if raw else {}
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"[store] Redis read FAILED for {key}: {e}", file=sys.stderr, flush=True)
             return {}
     if not file_path.exists():
         return {}
@@ -59,8 +61,12 @@ def write(key: str, file_path: Path, data: dict):
     if USE_REDIS:
         try:
             _set(key, json.dumps(data))
-        except Exception:
-            pass
+        except Exception as e:
+            import sys
+            print(f"[store] Redis write FAILED for {key}: {e}", file=sys.stderr, flush=True)
+            # fallback: also write to local file so data isn't lost in this process
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(json.dumps(data, indent=2))
     else:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(json.dumps(data, indent=2))

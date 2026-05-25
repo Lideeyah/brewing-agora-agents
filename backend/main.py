@@ -108,11 +108,19 @@ class RegisterAgentRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    from backend.store import USE_REDIS
+    from backend.store import USE_REDIS, _set, _get
+    redis_ok = None
+    if USE_REDIS:
+        try:
+            _set("brewing:healthcheck", "1")
+            redis_ok = _get("brewing:healthcheck") == "1"
+        except Exception as e:
+            redis_ok = f"error: {e}"
     return {
         "status":    "ok",
         "network":   "arc-testnet",
         "storage":   "redis" if USE_REDIS else "ephemeral-file",
+        "redis_ok":  redis_ok,
         "agents":    len(registry.all()),
         "tasks":     len(task_store.all()),
         "receipts":  len(receipt_store.all()),
