@@ -16,7 +16,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
+import json as _json_module
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -26,6 +28,16 @@ from backend.circle_wallets import provision_agent_wallet
 from backend.receipts       import sign_receipt, receipt_store
 from backend.tasks          import task_store, TaskRecord
 from backend.businesses     import business_store
+
+# ── Streaming event bus ───────────────────────────────────────────────────────
+# Maps task_id → list of subscriber queues (one per SSE connection)
+_task_streams: dict[str, list[asyncio.Queue]] = {}
+
+async def _emit(task_id: str, event_type: str, **kwargs):
+    """Broadcast a progress event to all SSE subscribers for a task."""
+    payload = {"type": event_type, **kwargs}
+    for q in _task_streams.get(task_id, []):
+        await q.put(payload)
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
@@ -205,17 +217,38 @@ async def _call_webhook(
 
 # ── Task marketplace ──────────────────────────────────────────────────────────
 
+@app.get("/api/tasks/{task_id}/stream")
+async def stream_task_events(task_id: str):
+    """SSE endpoint — streams live agent progress for a running task."""
+    q: asyncio.Queue = asyncio.Queue()
+    _task_streams.setdefault(task_id, []).append(q)
+
+    async def generate():
+        try:
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=120)
+                    yield f"data: {_json_module.dumps(ev)}\n\n"
+                    if ev.get("type") in ("done", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"type":"ping"}\n\n'
+        finally:
+            try:
+                _task_streams.get(task_id, []).remove(q)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/tasks")
 async def post_task(req: PostTaskRequest):
-    """
-    Multi-agent pipeline:
-    Planner breaks task into 3 sub-tasks → ResearchBot, AnalystBot, WriterBot each get
-    their own escrow + settlement → synthesizer combines outputs into final result.
-    """
-    import anthropic as _anthropic
-    import json as _json
-    import re as _re
-
+    """Create task immediately and run the agent pipeline in the background."""
     employer_addr = req.employer_address or client.account.address
 
     task = task_store.create(
@@ -228,9 +261,57 @@ async def post_task(req: PostTaskRequest):
     task.status = "in_progress"
     task_store.update(task)
 
+    # Launch pipeline as background task — returns task_id immediately
+    asyncio.create_task(_run_pipeline(task, req, employer_addr))
+    return {"task_id": task.task_id, "status": "in_progress"}
+
+
+async def _smart_route(description: str, agents: list, ai) -> tuple[str | None, str]:
+    """
+    Asks Claude to decide: single specialist agent or full multi-agent pipeline.
+    Returns (agent_name, reason) — agent_name=None means full pipeline.
+    """
+    import json as _j, re as _r
+    agent_summary = "\n".join(
+        f"- {a.name}: {', '.join(a.capabilities[:4])}" for a in agents
+    )
+    prompt = (
+        f"Task: {description}\n\n"
+        f"Available agents:\n{agent_summary}\n\n"
+        "Decide whether this task should be handled by a single specialist agent or the full multi-agent pipeline.\n"
+        "Use a single agent when the task is narrow and maps clearly to one agent's capabilities.\n"
+        "Use the full pipeline for broad, strategic, or multi-dimensional tasks.\n"
+        'Respond with JSON only: {"route": "<AgentName> or PIPELINE", "reason": "<one sentence>"}'
+    )
     try:
-        ai   = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-        loop = asyncio.get_running_loop()
+        resp = await ai.messages.create(
+            model      = "claude-haiku-4-5-20251001",
+            max_tokens = 120,
+            messages   = [{"role": "user", "content": prompt}],
+        )
+        raw  = resp.content[0].text.strip()
+        m    = _r.search(r'\{.*\}', raw, _r.DOTALL)
+        data = _j.loads(m.group()) if m else {}
+        route  = data.get("route", "PIPELINE").strip()
+        reason = data.get("reason", "")
+        # Only accept the route if that agent name exists in registry
+        known = {a.name for a in agents}
+        if route == "PIPELINE" or route not in known:
+            return None, reason or "Full pipeline selected"
+        return route, reason
+    except Exception:
+        return None, "Routing unavailable — using full pipeline"
+
+
+async def _run_pipeline(task, req, employer_addr: str):
+    """Full agent pipeline — runs in background, emits SSE events throughout."""
+    import anthropic as _anthropic
+    import json as _json
+    import re as _re
+    tid = task.task_id
+
+    try:
+        ai      = _anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
         # ── Locate agents ─────────────────────────────────────────────────────
         by_name = {a.name: a for a in registry.all()}
@@ -285,11 +366,25 @@ async def post_task(req: PostTaskRequest):
         employer_key = os.getenv("ARC_PRIVATE_KEY", "")
         task.subtasks = []
 
-        # ── Single-agent path (employer hired a specific agent) ───────────────
-        if req.selected_agent:
-            agent = by_name.get(req.selected_agent)
+        # ── Smart task routing (when no agent manually selected) ─────────────
+        effective_agent = req.selected_agent
+        if not effective_agent:
+            routed_name, route_reason = await _smart_route(req.description, registry.all(), ai)
+            await _emit(tid, "routed",
+                agent    = routed_name,
+                reason   = route_reason,
+                pipeline = routed_name is None,
+            )
+            if routed_name:
+                effective_agent = routed_name
+
+        # ── Single-agent path (manually hired or smart-routed to one agent) ──
+        if effective_agent:
+            agent = by_name.get(effective_agent)
             if not agent:
-                raise ValueError(f"Agent '{req.selected_agent}' not found in registry")
+                raise ValueError(f"Agent '{effective_agent}' not found in registry")
+
+            await _emit(tid, "agent_start", agent=agent.name, message="Locking USDC in escrow…")
 
             sub = {
                 "agent_name":  agent.name,
@@ -312,6 +407,7 @@ async def post_task(req: PostTaskRequest):
             sub["create_tx"] = escrow["create_tx"]
             sub["status"]    = "working"
             task_store.update(task)
+            await _emit(tid, "agent_working", agent=agent.name, message=f"Working on your task…")
 
             output = await _call_webhook(
                 agent,
@@ -322,6 +418,12 @@ async def post_task(req: PostTaskRequest):
                 file_context     = file_context,
             )
 
+            # Stream output text in chunks
+            await _emit(tid, "text_start", agent=agent.name)
+            for i in range(0, len(output), 80):
+                await _emit(tid, "text_chunk", agent=agent.name, text=output[i:i+80])
+                await asyncio.sleep(0.02)
+
             sub["result"] = output
             task_store.update(task)
 
@@ -329,6 +431,7 @@ async def post_task(req: PostTaskRequest):
             sub["settle_tx"] = settle_tx
             sub["status"]    = "completed"
             task_store.update(task)
+            await _emit(tid, "agent_done", agent=agent.name, message="Complete ✓")
 
             if employer_key:
                 receipt = sign_receipt(
@@ -349,6 +452,8 @@ async def post_task(req: PostTaskRequest):
             task.status       = "completed"
             task.completed_at = int(time.time())
             task_store.update(task)
+            await _emit(tid, "done", task_id=tid)
+            return
 
         # ── Multi-agent pipeline (no specific agent selected) ─────────────────
         else:
@@ -361,7 +466,8 @@ async def post_task(req: PostTaskRequest):
                 raise ValueError(f"Required pipeline agents not in registry: {missing}")
 
             # Step 1: Planner breaks task into 3 sub-tasks
-            plan_resp = await loop.run_in_executor(None, lambda: ai.messages.create(
+            await _emit(tid, "agent_start", agent="Planner", message="Breaking down your task…")
+            plan_resp = await ai.messages.create(
                 model      = "claude-haiku-4-5-20251001",
                 max_tokens = 600,
                 messages   = [{
@@ -376,7 +482,8 @@ async def post_task(req: PostTaskRequest):
                         '"portfolio": "sub-task for PortfolioBot: synthesise findings into portfolio recommendations and risk-adjusted conclusions"}'
                     ),
                 }],
-            ))
+            )
+            await _emit(tid, "agent_done", agent="Planner", message="Task plan ready ✓")
             raw_plan = plan_resp.content[0].text.strip()
             m        = _re.search(r'\{.*\}', raw_plan, _re.DOTALL)
             try:
@@ -400,6 +507,9 @@ async def post_task(req: PostTaskRequest):
 
             for agent, task_type in pipeline:
                 sub_desc = sub_descriptions[agent.name]
+
+                await _emit(tid, "agent_start", agent=agent.name, message=f"Locking {sub_budget:.3f} USDC in escrow…")
+
                 sub = {
                     "agent_name":  agent.name,
                     "description": sub_desc,
@@ -421,6 +531,7 @@ async def post_task(req: PostTaskRequest):
                 sub["create_tx"] = escrow["create_tx"]
                 sub["status"]    = "working"
                 task_store.update(task)
+                await _emit(tid, "agent_working", agent=agent.name, message="Working…")
 
                 if agent.webhook_url:
                     output = await _call_webhook(
@@ -432,20 +543,25 @@ async def post_task(req: PostTaskRequest):
                         file_context     = file_context,
                     )
                 else:
-                    agent_name_cap = agent.name
-                    work = await loop.run_in_executor(None, lambda d=sub_desc, n=agent_name_cap: ai.messages.create(
+                    # Stream Claude output token by token
+                    output_parts: list[str] = []
+                    await _emit(tid, "text_start", agent=agent.name)
+                    async with ai.messages.stream(
                         model      = "claude-opus-4-5",
                         max_tokens = 500,
                         messages   = [{
                             "role":    "user",
                             "content": (
-                                f"You are {n}, a specialized AI agent. "
-                                f"Complete this sub-task professionally:\n\n{d}"
+                                f"You are {agent.name}, a specialized AI agent. "
+                                f"Complete this sub-task professionally:\n\n{sub_desc}"
                                 f"{file_context}"
                             ),
                         }],
-                    ))
-                    output = work.content[0].text.strip()
+                    ) as stream:
+                        async for text in stream.text_stream:
+                            output_parts.append(text)
+                            await _emit(tid, "text_chunk", agent=agent.name, text=text)
+                    output = "".join(output_parts)
 
                 sub["result"]             = output
                 agent_outputs[agent.name] = output
@@ -455,6 +571,7 @@ async def post_task(req: PostTaskRequest):
                 sub["settle_tx"] = settle_tx
                 sub["status"]    = "completed"
                 task_store.update(task)
+                await _emit(tid, "agent_done", agent=agent.name, message="Complete ✓")
 
                 if employer_key:
                     receipt = sign_receipt(
@@ -472,9 +589,12 @@ async def post_task(req: PostTaskRequest):
 
                 registry.record_completion(agent.agent_id)
 
-            # Step 5: Synthesizer combines all three outputs
+            # Synthesizer combines all three outputs
+            await _emit(tid, "agent_start", agent="Synthesizer", message="Combining all outputs into final response…")
             combined = "\n\n".join(f"[{name}]\n{out}" for name, out in agent_outputs.items())
-            synth = await loop.run_in_executor(None, lambda: ai.messages.create(
+            synth_parts: list[str] = []
+            await _emit(tid, "text_start", agent="Synthesizer")
+            async with ai.messages.stream(
                 model      = "claude-opus-4-5",
                 max_tokens = 700,
                 messages   = [{
@@ -487,18 +607,22 @@ async def post_task(req: PostTaskRequest):
                         "Write the final unified response now:"
                     ),
                 }],
-            ))
-            task.result       = synth.content[0].text.strip()
-            task.status       = "completed"
-            task.completed_at = int(time.time())
-            task_store.update(task)
+            ) as stream:
+                async for text in stream.text_stream:
+                    synth_parts.append(text)
+                    await _emit(tid, "text_chunk", agent="Synthesizer", text=text)
+            task.result = "".join(synth_parts)
+            await _emit(tid, "agent_done", agent="Synthesizer", message="Done ✓")
 
-        return asdict(task)
+        task.status       = "completed"
+        task.completed_at = int(time.time())
+        task_store.update(task)
+        await _emit(tid, "done", task_id=tid)
 
     except Exception as e:
         task.status = "refunded"
         task_store.update(task)
-        raise HTTPException(status_code=500, detail=str(e))
+        await _emit(tid, "error", message=str(e))
 
 
 @app.get("/api/tasks")
@@ -580,6 +704,45 @@ async def get_wallet():
         except Exception:
             pass
     return {"address": addr, "balance_usdc": round(balance_usdc, 4), "network": "arc-testnet"}
+
+# ── Business profile ──────────────────────────────────────────────────────────
+
+@app.get("/api/businesses/me")
+async def get_my_business(address: str = ""):
+    """Return business profile + task stats for a given wallet address."""
+    if not address:
+        raise HTTPException(status_code=400, detail="address query param required")
+    biz = next(
+        (b for b in business_store._businesses.values()
+         if b.wallet_address.lower() == address.lower()),
+        None,
+    )
+    all_tasks = task_store.all()
+    my_tasks  = [
+        t for t in all_tasks
+        if t.employer_address.lower() == address.lower()
+    ]
+    completed  = [t for t in my_tasks if t.status == "completed"]
+    total_spent = round(sum(t.budget_usdc for t in completed), 4)
+
+    balance_usdc = 0.0
+    try:
+        balance_usdc = await client.native_balance(address)
+    except Exception:
+        pass
+
+    return {
+        "name":            biz.name           if biz else "",
+        "email":           biz.email          if biz else "",
+        "business_id":     biz.business_id    if biz else "",
+        "wallet_address":  address,
+        "balance_usdc":    round(balance_usdc, 4),
+        "tasks_total":     len(my_tasks),
+        "tasks_completed": len(completed),
+        "tasks_failed":    len([t for t in my_tasks if t.status == "failed"]),
+        "total_spent":     total_spent,
+    }
+
 
 # ── Agents ─────────────────────────────────────────────────────────────────────
 
