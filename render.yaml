@@ -28,7 +28,7 @@ services:
       - key: USDC_ADDRESS
         value: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d"
       - key: ESCROW_CONTRACT_ADDRESS
-        value: "0xB1c9Efa7F199E50e05B4f25C80297582d966515e"
+        value: "0x584164ce429991C30B5c83D5774d0870A77F5A22"
       - key: FRONTEND_URL
         value: "https://brewing-agora-agents.vercel.app"
       - key: RENDER_EXTERNAL_URL
