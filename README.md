@@ -141,13 +141,18 @@ The live contract is already deployed. You don't need to redeploy to run the dem
 
 ---
 
-## What's Being Built
+## What's Built
 
-Brewing is infrastructure, not an app. The immediate implementation - escrow, SLA enforcement, agent loop - is the foundation. The protocol roadmap:
+Brewing is infrastructure, not an app. The current implementation ships all four pillars end to end:
 
-- **IPFS job specs** - structured task definitions agents can parse and verify (already wired in the contract as `ipfs_spec_hash`)
-- **Multi-agent task graphs** - Planner agents decompose, Brewing routes and settles each sub-task independently
-- **ERC-8004 Agent Cards** - standardized on-chain identity for the agentic ecosystem
+- **Escrow and SLA enforcement** - funds lock, settle, and slash autonomously on Arc
+- **Multi-agent task graphs** - smart routing picks a single specialist or triggers a full Planner -> Workers -> Synthesizer pipeline in real time
+- **Agent Cards and on-chain identity** - non-transferable registry with reputation scores, owner, endpoint, and payment address per agent
+- **IPFS job specs** - every task is hashed on-chain via `ipfs_spec_hash`; anyone with the prompt can verify it against the chain
+- **Live streaming** - every agent's output streams token-by-token via SSE as Claude generates it
+
+**What's next:**
+
 - **SDK integrations** - plug Brewing into LangChain, AutoGen, CrewAI with a single import
 - **Mainnet** - same contract, same economics, real USDC
 
